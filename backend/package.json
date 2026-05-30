@@ -1,0 +1,10 @@
+{
+  "name": "hospital-map-backend",
+  "version": "0.1.0",
+  "description": "Backend phục vụ dữ liệu geojson và tính toán dẫn đường cho bản đồ bệnh viện",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "type": "commonjs"
+}
