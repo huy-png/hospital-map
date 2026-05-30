@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import MapView from './components/MapView.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import { fetchGeoJson, getRoute } from './services/api.js';
@@ -82,6 +82,7 @@ function App() {
     setSelectedPlace(place);
     setRouteFrom(place.id);
     setPlaceQuery('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSearchRoute = async () => {
@@ -101,6 +102,7 @@ function App() {
       setRoute(result.route || null);
       setStatus('Đã tìm đường');
       setPlaceQuery('');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       setError(err.message || 'Không thể tìm đường');
       setRoute(null);

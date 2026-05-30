@@ -576,27 +576,40 @@ button {
   color: #0f172a;
 }
 
-.quick-links {
-  display: grid;
-  gap: 10px;
-}
-
-.quick-links-dropdown {
+.quick-tags-container {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
 }
 
-.dropdown-label {
-  font-size: 0.9rem;
-  color: #475569;
+.quick-tag {
+  background: var(--soft);
+  border: 1px solid rgba(14, 165, 168, 0.15);
+  color: var(--primary);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: normal;
+  word-break: break-word;
+  text-align: left;
 }
 
-.quick-dropdown {
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(148,163,184,0.18);
-  background: #fff;
+.quick-tag:hover {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.quick-tag-icon {
+  font-size: 1rem;
 }
 
 .card-search {
@@ -995,6 +1008,15 @@ button {
   justify-content: space-between;
   gap: 10px;
   transition: transform 0.15s ease, border-color 0.15s ease;
+  min-width: 0; /* allows flex item to shrink below content size */
+}
+
+.list-item span:first-child {
+  white-space: normal;
+  word-break: break-word;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
 }
 
 .list-item:hover {
@@ -1008,6 +1030,7 @@ button {
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 0.75rem;
+  flex-shrink: 0;
 }
 
 .empty-state {
@@ -1078,9 +1101,11 @@ button {
 }
 
 /* allow sidebar to scroll when content is long */
+/* allow sidebar to scroll when content is long */
 .sidebar {
-  overflow: auto;
-  max-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
 /* compact inputs and buttons inside top controls */
@@ -1095,29 +1120,139 @@ button {
   padding: 8px 16px;
 }
 
+/* Mobile & Tablet Responsiveness */
 @media (max-width: 1100px) {
-  .app-shell {
+  .page-grid {
     grid-template-columns: 1fr;
+    padding: 16px 18px 24px;
+    gap: 18px;
   }
+  
+  .map-panel {
+    order: 1; /* Map on top */
+  }
+
   .sidebar {
-    position: static;
-    top: auto;
+    order: 2; /* Sidebar below the map */
+    max-height: none;
+    overflow: visible;
   }
-  .map-container {
-    height: 60vh;
+
+  .right-panel {
+    order: 3; /* Right panel at the bottom */
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 18px;
+  }
+
+  .map-top-card {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .map-top-card .route-actions {
+    grid-column: span 2;
+    margin-top: 8px;
   }
 }
 
-@media (max-width: 720px) {
-  .app-shell {
-    padding: 12px;
-    gap: 12px;
+@media (max-width: 768px) {
+  .top-header {
+    padding: 10px 14px;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    align-items: center;
   }
-  .map-container {
-    height: 55vh;
+
+  .header-actions {
+    gap: 8px;
   }
+
+  .header-actions .menu-item:not(.active) {
+    display: none; /* Hide inactive items on mobile to save space */
+  }
+
+  .header-qr-btn {
+    min-width: auto;
+    padding: 8px 16px;
+  }
+
+  .brand-title {
+    font-size: 0.95rem;
+  }
+
+  .brand-subtitle {
+    font-size: 0.78rem;
+  }
+
+  .brand-visual {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    font-size: 1.3rem;
+  }
+
+  .page-grid {
+    padding: 10px 12px;
+    gap: 14px;
+  }
+
+  .map-top-card {
+    grid-template-columns: 1fr;
+    padding: 14px;
+    gap: 10px;
+    border-radius: 18px;
+  }
+
+  .map-top-card .route-actions {
+    grid-column: span 1;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .map-top-card .route-actions .button {
+    width: 100%;
+    margin-top: 4px;
+  }
+
+  .map-wrapper {
+    min-height: 380px;
+    border-radius: 18px;
+  }
+
   .card {
     padding: 16px;
     border-radius: 18px;
+  }
+
+  .right-panel {
+    grid-template-columns: 1fr;
+  }
+  
+  .map-overlay-card {
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    padding: 12px;
+    border-radius: 16px;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .overlay-meta {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .overlay-meta strong {
+    margin-top: 2px;
+    font-size: 0.9rem;
+  }
+
+  .overlay-actions {
+    width: 100%;
+  }
+
+  .route-end-button {
+    width: 100%;
   }
 }

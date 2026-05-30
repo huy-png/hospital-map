@@ -8,13 +8,13 @@ export default function Sidebar({
   onSelectPlace
 }) {
   const quickItems = [
-    { label: 'Khoa khám bệnh', hint: 'Phòng khám đa khoa' },
-    { label: 'Khoa cấp cứu', hint: 'Cấp cứu 24/7' },
-    { label: 'Nhà thuốc', hint: 'Thuốc và dịch vụ' },
-    { label: 'Bãi giữ xe', hint: 'Khu đậu xe' },
-    { label: 'ATM', hint: 'Rút tiền' },
-    { label: 'Nhà vệ sinh', hint: 'Tiện ích' },
-    { label: 'Quầy thông tin', hint: 'Hỗ trợ khách' }
+    { label: 'Khoa khám bệnh', hint: 'Phòng khám đa khoa', icon: '🩺' },
+    { label: 'Khoa cấp cứu', hint: 'Cấp cứu 24/7', icon: '🚨' },
+    { label: 'Nhà thuốc', hint: 'Thuốc và dịch vụ', icon: '💊' },
+    { label: 'Bãi giữ xe', hint: 'Khu đậu xe', icon: '🅿️' },
+    { label: 'ATM', hint: 'Rút tiền', icon: '🏧' },
+    { label: 'Nhà vệ sinh', hint: 'Tiện ích', icon: '🚻' },
+    { label: 'Quầy thông tin', hint: 'Hỗ trợ khách', icon: 'ℹ️' }
   ];
 
   const areas = [
@@ -24,6 +24,20 @@ export default function Sidebar({
     'Khu C - Khu kỹ thuật',
     'Khu D - Dịch vụ'
   ];
+
+  const handleQuickClick = (item) => {
+    const queryMap = {
+      'Khoa khám bệnh': 'sanh',
+      'Khoa cấp cứu': 'gate',
+      'Nhà thuốc': 'cantin',
+      'Bãi giữ xe': 'nhaxe',
+      'ATM': 'sanh',
+      'Nhà vệ sinh': 'cantin',
+      'Quầy thông tin': 'sanh'
+    };
+    const searchVal = queryMap[item.label] || item.label;
+    setPlaceQuery(searchVal);
+  };
 
   return (
     <aside className="sidebar">
@@ -39,21 +53,19 @@ export default function Sidebar({
 
       <div className="card card-search">
         <div className="card-title">Tìm kiếm nhanh</div>
-        <div className="quick-links-dropdown">
-          <label className="dropdown-label">Chọn nhanh</label>
-          <select className="quick-dropdown" onChange={(e) => {
-            const idx = e.target.selectedIndex - 1;
-            if (idx >= 0) {
-              const item = quickItems[idx];
-              // attempt to search by quick label
-              setPlaceQuery(item.label);
-            }
-          }}>
-            <option value="">-- Chọn --</option>
-            {quickItems.map((item) => (
-              <option key={item.label} value={item.label}>{item.label} - {item.hint}</option>
-            ))}
-          </select>
+        <div className="quick-tags-container">
+          {quickItems.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              className="quick-tag"
+              onClick={() => handleQuickClick(item)}
+              title={`${item.label} - ${item.hint}`}
+            >
+              <span className="quick-tag-icon">{item.icon}</span>
+              <span className="quick-tag-label">{item.label}</span>
+            </button>
+          ))}
         </div>
 
         <div className="search-section">
