@@ -1,4 +1,12 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+const getApiBase = () => {
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
+  const hostname = typeof window !== 'undefined' && window.location ? window.location.hostname : 'localhost';
+  return `http://${hostname}:3000`;
+};
+
+const API_BASE = getApiBase();
 
 async function request(path) {
   const response = await fetch(`${API_BASE}${path}`);

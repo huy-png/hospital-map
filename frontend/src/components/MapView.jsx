@@ -105,7 +105,7 @@ function computeBounds(geoData, route, center) {
   return bounds.isValid() ? bounds : null;
 }
 
-export default function MapView({ center, layers, geoData, route, selectedPlace }) {
+export default function MapView({ center, layers, geoData, route, selectedPlace, userLocation }) {
   const bounds = useMemo(() => computeBounds(geoData, route, center), [geoData, route, center]);
   const maxBounds = bounds ? bounds.pad(0.15) : null;
 
@@ -182,8 +182,45 @@ export default function MapView({ center, layers, geoData, route, selectedPlace 
           </CircleMarker>
         )}
 
+        {userLocation && (
+          <>
+            <CircleMarker
+              center={[userLocation.lat, userLocation.lng]}
+              radius={14}
+              pathOptions={{
+                color: '#2563EB',
+                fillColor: '#2563EB',
+                fillOpacity: 0.15,
+                weight: 1,
+                className: 'gps-pulse-ring'
+              }}
+            />
+            <CircleMarker
+              center={[userLocation.lat, userLocation.lng]}
+              radius={7}
+              pathOptions={{
+                color: '#FFFFFF',
+                fillColor: '#2563EB',
+                fillOpacity: 1,
+                weight: 2.5
+              }}
+            >
+              <Popup>
+                <div style={{ fontFamily: 'Inter, sans-serif', padding: '2px' }}>
+                  <strong style={{ color: '#2563EB' }}>Vị trí của bạn</strong>
+                  <br />
+                  <span style={{ fontSize: '0.82em', color: '#64748B' }}>
+                    {userLocation.lat.toFixed(6)}, {userLocation.lng.toFixed(6)}
+                  </span>
+                </div>
+              </Popup>
+            </CircleMarker>
+          </>
+        )}
+
         <AutoFitBounds route={route} selectedPlace={selectedPlace} boundary={geoData.boundary} center={center} />
       </MapContainer>
     </div>
   );
 }
+

@@ -1256,3 +1256,269 @@ button {
     width: 100%;
   }
 }
+
+/* --- GPS Pulse Animation --- */
+@keyframes gpsPulse {
+  0% {
+    r: 10px;
+    fill-opacity: 0.25;
+    stroke-opacity: 0.6;
+  }
+  100% {
+    r: 22px;
+    fill-opacity: 0;
+    stroke-opacity: 0;
+  }
+}
+
+.gps-pulse-ring {
+  animation: gpsPulse 2s infinite ease-out;
+  transform-origin: center;
+}
+
+/* --- Warning Banner Accent --- */
+.warning-banner-accent {
+  background: rgba(239, 68, 68, 0.08) !important;
+  border: 1px dashed rgba(239, 68, 68, 0.45) !important;
+  color: #DC2626 !important;
+  font-weight: 600;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(220, 38, 38, 0.04);
+}
+
+/* --- Status rows --- */
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.status-row:last-of-type {
+  border-bottom: none;
+}
+
+.status-label {
+  font-size: 0.9rem;
+  color: #64748B;
+}
+
+.status-val {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.status-coordinates {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: #94A3B8;
+  margin-top: 4px;
+  text-align: right;
+}
+
+/* --- Text utilities --- */
+.text-success {
+  color: #10B981 !important;
+}
+
+.text-danger {
+  color: #EF4444 !important;
+}
+
+.text-warning {
+  color: #F59E0B !important;
+}
+
+.text-muted {
+  color: #94A3B8 !important;
+}
+
+/* --- QR Scanner Modal & Viewport --- */
+.qr-scanner-modal {
+  max-width: 480px;
+  width: 90%;
+  padding: 0 !important;
+  overflow: hidden;
+  border-radius: 28px !important;
+  background: #0F172A !important; /* Premium dark background */
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #F8FAFC !important;
+}
+
+.qr-scanner-modal .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.qr-scanner-modal .modal-header h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #FFFFFF;
+}
+
+.qr-scanner-modal .close-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: none;
+  color: #94A3B8;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 1.4rem;
+  display: grid;
+  place-items: center;
+  line-height: 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.qr-scanner-modal .close-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #FFFFFF;
+}
+
+.qr-scanner-viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #020617;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.qr-scanner-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.scanner-target-box {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 0 0 9999px rgba(2, 6, 23, 0.5); /* darkened mask outside */
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.scanner-target-box .corner {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 3px solid #0EA5A8; /* primary theme cyan accent */
+}
+
+.scanner-target-box .top-left {
+  top: 0;
+  left: 0;
+  border-right: none;
+  border-bottom: none;
+  border-top-left-radius: 12px;
+}
+
+.scanner-target-box .top-right {
+  top: 0;
+  right: 0;
+  border-left: none;
+  border-bottom: none;
+  border-top-right-radius: 12px;
+}
+
+.scanner-target-box .bottom-left {
+  bottom: 0;
+  left: 0;
+  border-right: none;
+  border-top: none;
+  border-bottom-left-radius: 12px;
+}
+
+.scanner-target-box .bottom-right {
+  bottom: 0;
+  right: 0;
+  border-left: none;
+  border-top: none;
+  border-bottom-right-radius: 12px;
+}
+
+@keyframes laserScan {
+  0% {
+    top: 5%;
+  }
+  50% {
+    top: 95%;
+  }
+  100% {
+    top: 5%;
+  }
+}
+
+.scanner-laser-line {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #0EA5A8, transparent);
+  box-shadow: 0 0 8px #0EA5A8, 0 0 15px rgba(14, 165, 168, 0.5);
+  animation: laserScan 2.5s infinite linear;
+}
+
+.scanner-instruction {
+  margin: 16px 24px 0;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #E2E8F0;
+  background: rgba(15, 23, 42, 0.75);
+  padding: 6px 16px;
+  border-radius: 999px;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.qr-scanner-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  text-align: center;
+  color: #F8FAFC;
+}
+
+.qr-scanner-error .error-icon {
+  font-size: 2.2rem;
+  margin-bottom: 12px;
+}
+
+.qr-scanner-error p {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #94A3B8;
+  line-height: 1.5;
+}
+
+.qr-scanner-modal .modal-actions {
+  padding: 16px 24px 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0F172A;
+}
+
+.qr-scanner-modal .modal-actions .button {
+  margin-top: 0;
+}
+

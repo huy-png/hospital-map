@@ -1,4 +1,4 @@
-﻿const http = require('http');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const PORT = process.env.PORT || 3000;
@@ -245,6 +245,6 @@ const server = http.createServer((req, res) => {
   sendJson(res, { error: 'Endpoint không tồn tại' }, 404);
 });
 
-server.listen(PORT, () => {
-  console.log(`Hospital map backend listening on http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Hospital map backend listening on port ${PORT} (accessible on local network)`);
 });
