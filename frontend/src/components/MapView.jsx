@@ -1,6 +1,6 @@
-import { useEffect, useMemo } from 'react';
+﻿import { useEffect, useMemo } from 'react';
 import L from 'leaflet';
-import { MapContainer, GeoJSON, CircleMarker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, GeoJSON, CircleMarker, Popup, TileLayer, useMap } from 'react-leaflet';
 
 const layerStyles = {
   road: {
@@ -12,7 +12,7 @@ const layerStyles = {
     color: '#CBD5E1',
     weight: 1,
     fillColor: '#FBFEFF',
-    fillOpacity: 0.7
+    fillOpacity: 0.55
   },
   boundary: {
     color: '#C7D2DA',
@@ -105,7 +105,14 @@ function computeBounds(geoData, route, center) {
   return bounds.isValid() ? bounds : null;
 }
 
-export default function MapView({ center, layers, geoData, route, selectedPlace, userLocation }) {
+export default function MapView({
+  center,
+  layers,
+  geoData,
+  route,
+  selectedPlace,
+  userLocation
+}) {
   const bounds = useMemo(() => computeBounds(geoData, route, center), [geoData, route, center]);
   const maxBounds = bounds ? bounds.pad(0.15) : null;
 
@@ -121,6 +128,11 @@ export default function MapView({ center, layers, geoData, route, selectedPlace,
         maxBounds={maxBounds || undefined}
         maxBoundsViscosity={0.85}
       >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+
         {layers.boundary && geoData.boundary && (
           <GeoJSON data={geoData.boundary} style={layerStyles.boundary} />
         )}

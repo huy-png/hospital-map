@@ -1,5 +1,6 @@
+﻿import { useState } from 'react';
+
 export default function Sidebar({
-  status,
   error,
   places,
   placeQuery,
@@ -7,6 +8,8 @@ export default function Sidebar({
   filteredPlaces,
   onSelectPlace
 }) {
+  const [activePopup, setActivePopup] = useState(null);
+
   const quickItems = [
     { label: 'Khoa khám bệnh', hint: 'Phòng khám đa khoa', icon: '🩺' },
     { label: 'Khoa cấp cứu', hint: 'Cấp cứu 24/7', icon: '🚨' },
@@ -31,7 +34,7 @@ export default function Sidebar({
       'Khoa cấp cứu': 'gate',
       'Nhà thuốc': 'cantin',
       'Bãi giữ xe': 'nhaxe',
-      'ATM': 'sanh',
+      ATM: 'sanh',
       'Nhà vệ sinh': 'cantin',
       'Quầy thông tin': 'sanh'
     };
@@ -39,34 +42,32 @@ export default function Sidebar({
     setPlaceQuery(searchVal);
   };
 
+  const handleAreaClick = (area) => {
+    setPlaceQuery(area);
+    setActivePopup(null);
+  };
+
   return (
     <aside className="sidebar">
-      <div className="card card-side">
-        <div>
-          <h1>Bệnh viện ABC</h1>
-          <p className="subtitle">Tìm kiếm nhanh và điều hướng trong khuôn viên.</p>
-        </div>
-        <span className={`status-badge ${status === 'Sẵn sàng' ? 'status-ok' : 'status-warning'}`}>
-          {status}
-        </span>
-      </div>
-
       <div className="card card-search">
         <div className="card-title">Tìm kiếm nhanh</div>
-        <div className="quick-tags-container">
+        <label className="field-label" htmlFor="quick-place-select">Chọn tiện ích</label>
+        <select
+          id="quick-place-select"
+          className="field-input quick-select"
+          defaultValue=""
+          onChange={(event) => {
+            const selectedItem = quickItems.find((item) => item.label === event.target.value);
+            if (selectedItem) handleQuickClick(selectedItem);
+          }}
+        >
+          <option value="" disabled>Chọn nhóm địa điểm</option>
           {quickItems.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              className="quick-tag"
-              onClick={() => handleQuickClick(item)}
-              title={`${item.label} - ${item.hint}`}
-            >
-              <span className="quick-tag-icon">{item.icon}</span>
-              <span className="quick-tag-label">{item.label}</span>
-            </button>
+            <option key={item.label} value={item.label}>
+              {item.icon} {item.label}
+            </option>
           ))}
-        </div>
+        </select>
 
         <div className="search-section">
           <label className="field-label">Tra cứu địa điểm</label>
@@ -93,32 +94,57 @@ export default function Sidebar({
         </div>
       </div>
 
-      <div className="card card-areas">
-        <div className="card-title">Tầng / Khu vực</div>
-        <div className="area-list">
-          {areas.map((area) => (
-            <button key={area} type="button" className="area-item" onClick={() => setPlaceQuery(area)}>
-              {area}
-            </button>
-          ))}
-        </div>
+      <div className="sidebar-popup-actions">
+        <button type="button" className="sidebar-popup-button" onClick={() => setActivePopup('areas')}>
+          <span className="sidebar-popup-icon" aria-hidden="true">+</span>
+          <span>Tầng / Khu vực</span>
+        </button>
+        <button type="button" className="sidebar-popup-button" onClick={() => setActivePopup('contact')}>
+          <span className="sidebar-popup-icon" aria-hidden="true">i</span>
+          <span>Thông tin liên hệ</span>
+        </button>
       </div>
 
-      <div className="card card-contact">
-        <div className="contact-label">Thông tin liên hệ</div>
-        <div className="contact-item">
-          <span>Điện thoại</span>
-          <strong>(028) 1234 5678</strong>
+      {activePopup === 'areas' && (
+        <div className="modal-overlay" onClick={() => setActivePopup(null)}>
+          <div className="modal info-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Tầng / Khu vực</h3>
+              <button className="close-btn" type="button" onClick={() => setActivePopup(null)}>×</button>
+            </div>
+            <div className="area-list">
+              {areas.map((area) => (
+                <button key={area} type="button" className="area-item" onClick={() => handleAreaClick(area)}>
+                  {area}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-        <div className="contact-item">
-          <span>Email</span>
-          <strong>info@benhvienabc.vn</strong>
+      )}
+
+      {activePopup === 'contact' && (
+        <div className="modal-overlay" onClick={() => setActivePopup(null)}>
+          <div className="modal info-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Thông tin liên hệ</h3>
+              <button className="close-btn" type="button" onClick={() => setActivePopup(null)}>×</button>
+            </div>
+            <div className="contact-item">
+              <span>Điện thoại</span>
+              <strong>(028) 1234 5678</strong>
+            </div>
+            <div className="contact-item">
+              <span>Email</span>
+              <strong>info@benhvienabc.vn</strong>
+            </div>
+            <div className="contact-item">
+              <span>Địa chỉ</span>
+              <strong>123 Đường Y Tế, P. An Lạc, Q. Bình Tân, TP.HCM</strong>
+            </div>
+          </div>
         </div>
-        <div className="contact-item">
-          <span>Địa chỉ</span>
-          <strong>123 Đường Y Tế, P. An Lạc, Q. Bình Tân, TP.HCM</strong>
-        </div>
-      </div>
+      )}
 
       {error && (
         <div className="card card-error">

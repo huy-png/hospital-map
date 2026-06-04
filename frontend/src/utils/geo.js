@@ -73,6 +73,85 @@ export function queryPlaces(places, query) {
   );
 }
 
+export function haversineDistanceKm(a, b) {
+  const [lat1, lng1] = a;
+  const [lat2, lng2] = b;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const radLat1 = toRad(lat1);
+  const radLat2 = toRad(lat2);
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  const aVal = sinDLat * sinDLat + sinDLng * sinDLng * Math.cos(radLat1) * Math.cos(radLat2);
+  const c = 2 * Math.atan2(Math.sqrt(aVal), Math.sqrt(1 - aVal));
+  return earthRadiusKm * c;
+}
+
+export function getRoadNodeIndex(roadGeoJson) {
+  const nodes = new Map();
+
+  for (const feature of roadGeoJson?.features || []) {
+    const from = feature?.properties?.from;
+    const to = feature?.properties?.to;
+    const coords = feature?.geometry?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+
+    const first = coords[0];
+    const last = coords[coords.length - 1];
+    if (typeof from === 'string' && from.trim() && Array.isArray(first)) {
+      nodes.set(from.trim(), { id: from.trim(), coords: [first[1], first[0]] });
+    }
+    if (typeof to === 'string' && to.trim() && Array.isArray(last)) {
+      nodes.set(to.trim(), { id: to.trim(), coords: [last[1], last[0]] });
+    }
+  }
+
+  return nodes;
+}
+
+export function findNearestRoadNode(userLocation, roadGeoJson) {
+  if (!userLocation) return null;
+  const userCoords = [userLocation.lat, userLocation.lng];
+  const nodes = getRoadNodeIndex(roadGeoJson);
+  let nearest = null;
+
+  for (const node of nodes.values()) {
+    const distanceKm = haversineDistanceKm(userCoords, node.coords);
+    if (!nearest || distanceKm < nearest.distanceKm) {
+      nearest = { ...node, distanceKm, distanceMeters: distanceKm * 1000 };
+    }
+  }
+
+  return nearest;
+}
+
+export function prependGpsConnector(routeGeoJson, userLocation, nearestNode) {
+  if (!userLocation || !nearestNode?.coords) return routeGeoJson;
+
+  const connector = {
+    type: 'Feature',
+    properties: {
+      from: 'gps-location',
+      to: nearestNode.id,
+      source: 'gps-connector'
+    },
+    geometry: {
+      type: 'LineString',
+      coordinates: [
+        [userLocation.lng, userLocation.lat],
+        [nearestNode.coords[1], nearestNode.coords[0]]
+      ]
+    }
+  };
+
+  return {
+    type: 'FeatureCollection',
+    features: [connector, ...(routeGeoJson?.features || [])]
+  };
+}
+
 export function checkUserLocationInHospital(lat, lng, boundaryGeoJson, bufferMeters = 20) {
   if (!boundaryGeoJson || !boundaryGeoJson.features || boundaryGeoJson.features.length === 0) {
     return { inside: true, distance: 0 };
