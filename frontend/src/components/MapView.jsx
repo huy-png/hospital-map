@@ -111,7 +111,8 @@ export default function MapView({
   geoData,
   route,
   selectedPlace,
-  userLocation
+  userLocation,
+  electricVehicleLocation
 }) {
   const bounds = useMemo(() => computeBounds(geoData, route, center), [geoData, route, center]);
   const maxBounds = bounds ? bounds.pad(0.15) : null;
@@ -223,6 +224,47 @@ export default function MapView({
                   <br />
                   <span style={{ fontSize: '0.82em', color: '#64748B' }}>
                     {userLocation.lat.toFixed(6)}, {userLocation.lng.toFixed(6)}
+                  </span>
+                </div>
+              </Popup>
+            </CircleMarker>
+          </>
+        )}
+
+        {electricVehicleLocation && (
+          <>
+            <CircleMarker
+              center={[electricVehicleLocation.lat, electricVehicleLocation.lng]}
+              radius={15}
+              pathOptions={{
+                color: '#F59E0B',
+                fillColor: '#F59E0B',
+                fillOpacity: 0.14,
+                weight: 1.2,
+                className: 'vehicle-pulse-ring'
+              }}
+            />
+            <CircleMarker
+              center={[electricVehicleLocation.lat, electricVehicleLocation.lng]}
+              radius={8}
+              pathOptions={{
+                color: '#FFFFFF',
+                fillColor: '#F59E0B',
+                fillOpacity: 1,
+                weight: 2.5
+              }}
+            >
+              <Popup>
+                <div style={{ fontFamily: 'Inter, sans-serif', padding: '2px' }}>
+                  <strong style={{ color: '#B45309' }}>Xe điện</strong>
+                  <br />
+                  <span style={{ fontSize: '0.82em', color: '#64748B' }}>
+                    {electricVehicleLocation.lat.toFixed(6)}, {electricVehicleLocation.lng.toFixed(6)}
+                  </span>
+                  <br />
+                  <span style={{ fontSize: '0.78em', color: '#64748B' }}>
+                    Thiết bị: {electricVehicleLocation.device}
+                    {electricVehicleLocation.satellites !== undefined ? ` · ${electricVehicleLocation.satellites} vệ tinh` : ''}
                   </span>
                 </div>
               </Popup>

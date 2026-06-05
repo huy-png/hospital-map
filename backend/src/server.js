@@ -1,18 +1,47 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+
+function loadEnvFile() {
+  const envPath = path.join(__dirname, '..', '.env');
+  if (!fs.existsSync(envPath)) return;
+
+  const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const equalsIndex = trimmed.indexOf('=');
+    if (equalsIndex === -1) return;
+
+    const key = trimmed.slice(0, equalsIndex).trim();
+    const rawValue = trimmed.slice(equalsIndex + 1).trim();
+    const value = rawValue.replace(/^["']|["']$/g, '');
+    if (key && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  });
+}
+
+loadEnvFile();
+
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'geojson');
 const AVAILABLE_FILES = new Set(['road', 'building', 'point', 'boundary']);
-const https = require('https');
 
 // Firebase Realtime Database config (use REST API)
 const FIREBASE = {
-  apiKey: "AIzaSyAyccxaZ21dcb7jgHzvPrjZrLro-ro_Yh0",
-  authDomain: "test1-7399f.firebaseapp.com",
-  databaseURL: "https://test1-7399f-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "test1-7399f",
+  apiKey: process.env.FIREBASE_API_KEY || "AIzaSyAyccxaZ21dcb7jgHzvPrjZrLro-ro_Yh0",
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN || "test1-7399f.firebaseapp.com",
+  databaseURL: process.env.FIREBASE_DATABASE_URL || "https://test1-7399f-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: process.env.FIREBASE_PROJECT_ID || "test1-7399f",
+  email: process.env.FIREBASE_EMAIL,
+  password: process.env.FIREBASE_PASSWORD,
+  gpsRoot: process.env.FIREBASE_GPS_ROOT || 'iot',
+  gpsDevice: process.env.FIREBASE_GPS_DEVICE || '441D64F39AF0',
 };
+
+let firebaseAuthCache = null;
 
 function readJsonFile(name) {
   const filePath = path.join(DATA_DIR, `${name}.geojson`);
@@ -134,23 +163,33 @@ function sendJson(res, data, status = 200) {
   res.end(body);
 }
 
-function fetchFirebaseNode(nodeId) {
+function requestJson(url, options = {}, payload = null) {
   return new Promise((resolve, reject) => {
-    if (!FIREBASE.databaseURL) return reject(new Error('Firebase databaseURL not configured'));
-    const url = new URL(`${FIREBASE.databaseURL.replace(/\/$/, '')}/${encodeURIComponent(nodeId)}.json`);
+    const target = new URL(url);
     const opts = {
-      hostname: url.hostname,
-      path: url.pathname + (url.search || ''),
-      method: 'GET',
+      hostname: target.hostname,
+      path: target.pathname + (target.search || ''),
+      method: options.method || 'GET',
+      headers: options.headers || {},
     };
+    const body = payload ? JSON.stringify(payload) : null;
+    if (body) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.headers['Content-Length'] = Buffer.byteLength(body);
+    }
 
     const req = https.request(opts, (res) => {
-      let body = '';
+      let responseBody = '';
       res.setEncoding('utf8');
-      res.on('data', (chunk) => (body += chunk));
+      res.on('data', (chunk) => (responseBody += chunk));
       res.on('end', () => {
         try {
-          const parsed = JSON.parse(body || 'null');
+          const parsed = JSON.parse(responseBody || 'null');
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const message = parsed?.error?.message || parsed?.error || `HTTP ${res.statusCode}`;
+            reject(new Error(message));
+            return;
+          }
           resolve(parsed);
         } catch (err) {
           reject(err);
@@ -159,8 +198,44 @@ function fetchFirebaseNode(nodeId) {
     });
 
     req.on('error', (err) => reject(err));
+    if (body) req.write(body);
     req.end();
   });
+}
+
+async function getFirebaseIdToken() {
+  if (!FIREBASE.apiKey) throw new Error('Firebase apiKey not configured');
+  if (!FIREBASE.email || !FIREBASE.password) {
+    throw new Error('Firebase email/password not configured. Set FIREBASE_EMAIL and FIREBASE_PASSWORD in backend/.env');
+  }
+
+  const now = Date.now();
+  if (firebaseAuthCache && firebaseAuthCache.expiresAt - 60000 > now) {
+    return firebaseAuthCache.idToken;
+  }
+
+  const authUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(FIREBASE.apiKey)}`;
+  const auth = await requestJson(authUrl, { method: 'POST' }, {
+    email: FIREBASE.email,
+    password: FIREBASE.password,
+    returnSecureToken: true,
+  });
+
+  const expiresInMs = Number(auth.expiresIn || 3600) * 1000;
+  firebaseAuthCache = {
+    idToken: auth.idToken,
+    expiresAt: now + expiresInMs,
+  };
+  return auth.idToken;
+}
+
+async function fetchFirebaseGpsDevice(deviceId) {
+  if (!FIREBASE.databaseURL) throw new Error('Firebase databaseURL not configured');
+  const idToken = await getFirebaseIdToken();
+  const pathParts = [FIREBASE.gpsRoot, deviceId].filter(Boolean).map((part) => encodeURIComponent(part));
+  const url = new URL(`${FIREBASE.databaseURL.replace(/\/$/, '')}/${pathParts.join('/')}.json`);
+  url.searchParams.set('auth', idToken);
+  return requestJson(url.toString());
 }
 
 function handleGeoJsonRequest(req, res, name) {
@@ -235,9 +310,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (pathname === '/firebase/gps') {
-    // Return GPS data only for node 441D64F39AF0 as requested
-    fetchFirebaseNode('441D64F39AF0')
-      .then((data) => sendJson(res, { status: 'ok', node: '441D64F39AF0', data }))
+    const device = parsedUrl.searchParams.get('device') || FIREBASE.gpsDevice;
+    fetchFirebaseGpsDevice(device)
+      .then((data) => sendJson(res, { status: 'ok', root: FIREBASE.gpsRoot, device, data }))
       .catch((err) => sendJson(res, { error: 'Không thể lấy dữ liệu từ Firebase', details: err.message }, 500));
     return;
   }

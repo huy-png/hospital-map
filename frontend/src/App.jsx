@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useState, useRef } from 'react';
 import MapView from './components/MapView.jsx';
 import Sidebar from './components/Sidebar.jsx';
-import { fetchGeoJson, getRoute } from './services/api.js';
+import { fetchElectricVehicleGps, fetchGeoJson, getRoute } from './services/api.js';
 import {
   buildPlaceIndex,
   queryPlaces,
@@ -12,6 +12,7 @@ import {
 
 const INITIAL_CENTER = [10.7813, 106.7030];
 const GPS_ROUTE_START_ID = 'gps-location';
+const ELECTRIC_VEHICLE_DEVICE_ID = '441D64F39AF0';
 
 function App() {
   const [geoData, setGeoData] = useState({ road: null, building: null, point: null, boundary: null });
@@ -25,7 +26,7 @@ function App() {
   const [status, setStatus] = useState('Sẵn sàng');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [layers, setLayers] = useState({ road: true, building: true, point: true, boundary: false });
+  const [layers, setLayers] = useState({ road: true, building: true, point: true, boundary: false, vehicle: true });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [mobileRoutePanelOpen, setMobileRoutePanelOpen] = useState(false);
@@ -35,6 +36,8 @@ function App() {
   const [gpsStatus, setGpsStatus] = useState('prompt'); // prompt, tracking, denied, error
   const [isInsideHospital, setIsInsideHospital] = useState(true);
   const [isGeofenceEnabled, setIsGeofenceEnabled] = useState(true);
+  const [electricVehicleLocation, setElectricVehicleLocation] = useState(null);
+  const [electricVehicleStatus, setElectricVehicleStatus] = useState('loading');
 
   // Camera QR scanner state variables
   const [qrStream, setQrStream] = useState(null);
@@ -167,6 +170,49 @@ function App() {
     loadData();
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadElectricVehicleGps() {
+      try {
+        const result = await fetchElectricVehicleGps(ELECTRIC_VEHICLE_DEVICE_ID);
+        const gps = result?.data?.gps || result?.data;
+        const lat = Number(gps?.latitude ?? gps?.lat);
+        const lng = Number(gps?.longitude ?? gps?.lng ?? gps?.lon);
+
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          throw new Error('Dữ liệu GPS xe điện không hợp lệ');
+        }
+
+        if (isMounted) {
+          setElectricVehicleLocation({
+            lat,
+            lng,
+            device: result.device || ELECTRIC_VEHICLE_DEVICE_ID,
+            satellites: gps?.satellites,
+            speed: gps?.speed,
+            timestamp: gps?.timestamp,
+            wifiSignal: gps?.wifiSignal
+          });
+          setElectricVehicleStatus('online');
+        }
+      } catch (err) {
+        console.error('Error loading electric vehicle GPS:', err);
+        if (isMounted) {
+          setElectricVehicleStatus('error');
+        }
+      }
+    }
+
+    loadElectricVehicleGps();
+    const intervalId = window.setInterval(loadElectricVehicleGps, 5000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   const filteredPlaces = useMemo(() => queryPlaces(places, placeQuery), [places, placeQuery]);
 
   const routeablePlaceIds = useMemo(() => {
@@ -190,6 +236,7 @@ function App() {
     : 'Vị trí GPS của bạn';
   const routeToLabel = routePlaces.find((item) => item.id === routeTo)?.label || routeTo;
   const activeLayerCount = Object.values(layers).filter(Boolean).length;
+  const totalLayerCount = Object.keys(layers).length;
 
   const handleSelectPlace = (place) => {
     setSelectedPlace(place);
@@ -355,6 +402,7 @@ function App() {
                 route={route}
                 selectedPlace={selectedPlace}
                 userLocation={userLocation}
+                electricVehicleLocation={layers.vehicle ? electricVehicleLocation : null}
               />
 
               {(route || selectedPlace) && (
@@ -409,13 +457,17 @@ function App() {
                   <span className="legend-chip chip-pharmacy" />
                   <span>Nhà thuốc</span>
                 </div>
+                <div className="legend-entry">
+                  <span className="legend-chip chip-vehicle" />
+                  <span>Xe điện</span>
+                </div>
               </div>
             </div>
 
             <details className="card layers-card layer-dropdown">
               <summary className="layer-dropdown-summary">
                 <span>Lớp bản đồ</span>
-                <strong>{activeLayerCount}/4 đang bật</strong>
+                <strong>{activeLayerCount}/{totalLayerCount} đang bật</strong>
               </summary>
               <div className="layer-dropdown-body">
                 <div className="layer-toggle">
@@ -440,6 +492,12 @@ function App() {
                   <label>
                     <input type="checkbox" checked={layers.boundary} onChange={() => toggleLayer('boundary')} />
                     Ranh giới khu vực
+                  </label>
+                </div>
+                <div className="layer-toggle">
+                  <label>
+                    <input type="checkbox" checked={layers.vehicle} onChange={() => toggleLayer('vehicle')} />
+                    Xe điện
                   </label>
                 </div>
               </div>
@@ -495,11 +553,25 @@ function App() {
                     <span>{isGeofenceEnabled ? 'Đang kiểm tra' : 'Tắt demo'}</span>
                   </label>
                 </div>
+
+                <div className="status-row">
+                  <span className="status-label">Xe điện</span>
+                  <span className={`status-chip ${electricVehicleStatus === 'online' ? 'status-success' : electricVehicleStatus === 'loading' ? 'status-muted' : 'status-danger'}`}>
+                    <span className="status-dot" />
+                    {electricVehicleStatus === 'online' ? 'Đang cập nhật' : electricVehicleStatus === 'loading' ? 'Đang kết nối' : 'Mất kết nối'}
+                  </span>
+                </div>
               </div>
 
               {userLocation && (
                 <div className="status-coordinates">
-                  {userLocation.lat.toFixed(5)}, {userLocation.lng.toFixed(5)}
+                  Người dùng: {userLocation.lat.toFixed(5)}, {userLocation.lng.toFixed(5)}
+                </div>
+              )}
+
+              {electricVehicleLocation && (
+                <div className="status-coordinates vehicle-coordinates">
+                  Xe điện: {electricVehicleLocation.lat.toFixed(5)}, {electricVehicleLocation.lng.toFixed(5)}
                 </div>
               )}
 

@@ -1,0 +1,5 @@
+
+> hospital-map-backend@0.1.0 start
+> node src/server.js
+
+Hospital map backend listening on port 3000 (accessible on local network)

@@ -25,3 +25,10 @@ export function getRoute(from, to) {
   const params = new URLSearchParams({ from, to });
   return request(`/route?${params.toString()}`);
 }
+
+export function fetchElectricVehicleGps(device) {
+  const params = new URLSearchParams();
+  if (device) params.set('device', device);
+  const query = params.toString();
+  return request(`/firebase/gps${query ? `?${query}` : ''}`);
+}
