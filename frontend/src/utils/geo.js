@@ -22,6 +22,22 @@ function formatLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function isValidLngLat(coord) {
+  return Array.isArray(coord)
+    && coord.length >= 2
+    && Number.isFinite(Number(coord[0]))
+    && Number.isFinite(Number(coord[1]));
+}
+
+function normalizeCoord(coord) {
+  return [Number(coord[0]), Number(coord[1])];
+}
+
+export function getCoordRouteId(coord) {
+  const [lng, lat] = normalizeCoord(coord);
+  return `coord:${lng.toFixed(6)},${lat.toFixed(6)}`;
+}
+
 export function buildPlaceIndex({ roadGeoJson, pointGeoJson }) {
   const points = new Map();
   const placeList = [];
@@ -63,6 +79,32 @@ export function buildPlaceIndex({ roadGeoJson, pointGeoJson }) {
   }
 
   return placeList.sort((a, b) => a.label.localeCompare(b.label, 'vi'));
+}
+
+export function buildMap10PlaceIndex(map10GeoJson) {
+  const places = [];
+  const labelCounts = new Map();
+
+  for (const feature of map10GeoJson?.features || []) {
+    if (feature?.geometry?.type !== 'Point' || !isValidLngLat(feature.geometry.coordinates)) continue;
+
+    const id = findGeoJsonId(feature);
+    if (!id) continue;
+
+    const coords = normalizeCoord(feature.geometry.coordinates);
+    const baseLabel = formatLabel(id);
+    const count = (labelCounts.get(baseLabel) || 0) + 1;
+    labelCounts.set(baseLabel, count);
+
+    places.push({
+      id: getCoordRouteId(coords),
+      label: count > 1 ? `${baseLabel} (${count})` : baseLabel,
+      coords: [coords[1], coords[0]],
+      source: 'map-1.0'
+    });
+  }
+
+  return places.sort((a, b) => a.label.localeCompare(b.label, 'vi'));
 }
 
 export function queryPlaces(places, query) {
@@ -111,10 +153,43 @@ export function getRoadNodeIndex(roadGeoJson) {
   return nodes;
 }
 
+export function getMap10NodeIndex(map10GeoJson) {
+  const nodes = new Map();
+
+  for (const feature of map10GeoJson?.features || []) {
+    if (feature?.geometry?.type !== 'LineString') continue;
+
+    for (const coord of feature.geometry.coordinates || []) {
+      if (!isValidLngLat(coord)) continue;
+      const normalized = normalizeCoord(coord);
+      const id = getCoordRouteId(normalized);
+      nodes.set(id, { id, label: 'đường gần nhất', coords: [normalized[1], normalized[0]] });
+    }
+  }
+
+  return nodes;
+}
+
 export function findNearestRoadNode(userLocation, roadGeoJson) {
   if (!userLocation) return null;
   const userCoords = [userLocation.lat, userLocation.lng];
   const nodes = getRoadNodeIndex(roadGeoJson);
+  let nearest = null;
+
+  for (const node of nodes.values()) {
+    const distanceKm = haversineDistanceKm(userCoords, node.coords);
+    if (!nearest || distanceKm < nearest.distanceKm) {
+      nearest = { ...node, distanceKm, distanceMeters: distanceKm * 1000 };
+    }
+  }
+
+  return nearest;
+}
+
+export function findNearestMap10RoadNode(userLocation, map10GeoJson) {
+  if (!userLocation) return null;
+  const userCoords = [userLocation.lat, userLocation.lng];
+  const nodes = getMap10NodeIndex(map10GeoJson);
   let nearest = null;
 
   for (const node of nodes.values()) {

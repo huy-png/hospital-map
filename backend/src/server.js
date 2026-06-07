@@ -27,7 +27,7 @@ loadEnvFile();
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'geojson');
-const AVAILABLE_FILES = new Set(['road', 'building', 'point', 'boundary']);
+const AVAILABLE_FILES = new Set(['road', 'building', 'point', 'boundary', 'map-1.0']);
 
 // Firebase Realtime Database config (use REST API)
 const FIREBASE = {
@@ -70,6 +70,22 @@ function haversineDistance(a, b) {
   return R * c;
 }
 
+function isValidLngLat(coord) {
+  return Array.isArray(coord)
+    && coord.length >= 2
+    && Number.isFinite(Number(coord[0]))
+    && Number.isFinite(Number(coord[1]));
+}
+
+function normalizeCoord(coord) {
+  return [Number(coord[0]), Number(coord[1])];
+}
+
+function getCoordKey(coord) {
+  const [lon, lat] = normalizeCoord(coord);
+  return `coord:${lon.toFixed(6)},${lat.toFixed(6)}`;
+}
+
 function buildGraph(roadGeoJson) {
   const graph = new Map();
 
@@ -98,6 +114,60 @@ function buildGraph(roadGeoJson) {
   }
 
   return graph;
+}
+
+function buildCoordinateGraph(geoJson) {
+  const graph = new Map();
+  const aliases = new Map();
+  const coordsByNode = new Map();
+
+  function addNode(coord) {
+    const normalized = normalizeCoord(coord);
+    const key = getCoordKey(normalized);
+    if (!graph.has(key)) graph.set(key, []);
+    coordsByNode.set(key, normalized);
+    return key;
+  }
+
+  function addEdge(fromCoord, toCoord) {
+    const from = addNode(fromCoord);
+    const to = addNode(toCoord);
+    if (from === to) return;
+
+    const coords = [coordsByNode.get(from), coordsByNode.get(to)];
+    const weight = haversineDistance(coords[0], coords[1]);
+    if (weight <= 0) return;
+
+    graph.get(from).push({ node: to, weight, coords });
+    graph.get(to).push({ node: from, weight, coords: [...coords].reverse() });
+  }
+
+  for (const feature of geoJson.features || []) {
+    const geometry = feature.geometry;
+    if (!geometry) continue;
+
+    if (geometry.type === 'LineString' && Array.isArray(geometry.coordinates)) {
+      const coords = geometry.coordinates.filter(isValidLngLat).map(normalizeCoord);
+      for (let i = 0; i < coords.length - 1; i++) {
+        addEdge(coords[i], coords[i + 1]);
+      }
+    }
+
+    if (geometry.type === 'Point' && isValidLngLat(geometry.coordinates)) {
+      const key = addNode(geometry.coordinates);
+      const id = feature.properties?.id;
+      if (typeof id === 'string' && id.trim() && !aliases.has(id.trim())) {
+        aliases.set(id.trim(), key);
+      }
+    }
+  }
+
+  return { graph, aliases, coordsByNode };
+}
+
+function resolveGraphNode(input, graphData) {
+  if (graphData.graph.has(input)) return input;
+  return graphData.aliases.get(input) || null;
 }
 
 function dijkstra(graph, start, target) {
@@ -261,20 +331,26 @@ function handleRouteRequest(req, res, query) {
     return;
   }
 
-  const roadGeoJson = readJsonFile('road');
+  const mapName = query.map === 'road' ? 'road' : 'map-1.0';
+  const roadGeoJson = readJsonFile(mapName);
   if (!roadGeoJson) {
     sendJson(res, { error: 'Không tìm thấy dữ liệu đường' }, 500);
     return;
   }
 
-  const graph = buildGraph(roadGeoJson);
-  if (!graph.has(from) || !graph.has(to)) {
+  const graphData = mapName === 'road'
+    ? { graph: buildGraph(roadGeoJson), aliases: new Map(), coordsByNode: new Map() }
+    : buildCoordinateGraph(roadGeoJson);
+  const resolvedFrom = resolveGraphNode(from, graphData);
+  const resolvedTo = resolveGraphNode(to, graphData);
+
+  if (!resolvedFrom || !resolvedTo) {
     sendJson(res, { error: `Không tìm thấy điểm bắt đầu hoặc điểm kết thúc trong dữ liệu đường: ${from}, ${to}` }, 404);
     return;
   }
 
-  const route = dijkstra(graph, from, to);
-  if (!route || route.length === 0) {
+  const route = dijkstra(graphData.graph, resolvedFrom, resolvedTo);
+  if (!route || (route.length === 0 && resolvedFrom !== resolvedTo)) {
     sendJson(res, { error: `Không tìm thấy tuyến đường giữa ${from} và ${to}` }, 404);
     return;
   }
@@ -284,6 +360,7 @@ function handleRouteRequest(req, res, query) {
     status: 'ok',
     from,
     to,
+    map: mapName,
     length_km: route.reduce((sum, edge) => sum + edge.weight, 0),
     route: featureCollection,
   });
@@ -298,14 +375,14 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const geoMatch = pathname.match(/^\/geojson\/(\w+)$/);
+  const geoMatch = pathname.match(/^\/geojson\/([\w.-]+)$/);
   if (geoMatch) {
     handleGeoJsonRequest(req, res, geoMatch[1]);
     return;
   }
 
   if (pathname === '/' || pathname === '/health') {
-    sendJson(res, { status: 'running', availableGeojson: Array.from(AVAILABLE_FILES), routeExample: '/route?from=gate-ltr&to=IT-room' });
+    sendJson(res, { status: 'running', availableGeojson: Array.from(AVAILABLE_FILES), routeExample: '/route?map=map-1.0&from=coord:106.703157,10.780525&to=coord:106.703358,10.782190' });
     return;
   }
 

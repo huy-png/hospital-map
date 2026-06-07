@@ -21,8 +21,9 @@ export function fetchGeoJson(name) {
   return request(`/geojson/${name}`);
 }
 
-export function getRoute(from, to) {
+export function getRoute(from, to, mapName) {
   const params = new URLSearchParams({ from, to });
+  if (mapName) params.set('map', mapName);
   return request(`/route?${params.toString()}`);
 }
 

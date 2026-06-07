@@ -19,6 +19,18 @@ const layerStyles = {
     weight: 2,
     dashArray: '6 6'
   },
+  map10Line: {
+    color: '#64748B',
+    weight: 2.5,
+    opacity: 0.8,
+    dashArray: '4 4'
+  },
+  map10Polygon: {
+    color: '#14B8A6',
+    weight: 1.2,
+    fillColor: '#CCFBF1',
+    fillOpacity: 0.38
+  },
   route: {
     color: '#0EA5A8',
     weight: 5,
@@ -26,7 +38,38 @@ const layerStyles = {
   }
 };
 
-function AutoFitBounds({ route, selectedPlace, boundary, center }) {
+function getFeatureName(feature, fallback = 'Map 1.0') {
+  const props = feature?.properties || {};
+  return props.name || props.id || props.label || fallback;
+}
+
+function getMap10Style(feature) {
+  if (feature?.geometry?.type === 'Polygon' || feature?.geometry?.type === 'MultiPolygon') {
+    return layerStyles.map10Polygon;
+  }
+
+  return layerStyles.map10Line;
+}
+
+function bindMap10Feature(feature, layer) {
+  const name = getFeatureName(feature);
+  const type = feature?.geometry?.type || 'GeoJSON';
+
+  layer.bindTooltip(`<strong>${name}</strong><br>Map 1.0`, {
+    permanent: false,
+    direction: 'top',
+    offset: [0, -10]
+  });
+
+  layer.bindPopup(`
+    <div style="font-family: Inter, sans-serif; max-width: 220px;">
+      <h4 style="margin: 0 0 8px; color: #0F766E;">${name}</h4>
+      <p style="margin: 0; font-size: 0.9em; color: #64748B;">Lớp: Map 1.0 · ${type}</p>
+    </div>
+  `);
+}
+
+function AutoFitBounds({ route, selectedPlace, boundary, map10, center }) {
   const map = useMap();
 
   useEffect(() => {
@@ -43,11 +86,21 @@ function AutoFitBounds({ route, selectedPlace, boundary, center }) {
       bounds.push(selectedPlace.coords);
     }
 
-    if (!bounds.length && boundary?.features?.length) {
-      boundary.features.forEach((feature) => {
-        const coords = feature.geometry.coordinates?.[0] || [];
-        coords.forEach(([lon, lat]) => bounds.push([lat, lon]));
+    if (!bounds.length) {
+      const fallbackBounds = L.latLngBounds([]);
+
+      boundary?.features?.forEach((feature) => {
+        collectGeoJsonCoords(fallbackBounds, feature.geometry?.coordinates);
       });
+
+      map10?.features?.forEach((feature) => {
+        collectGeoJsonCoords(fallbackBounds, feature.geometry?.coordinates);
+      });
+
+      if (fallbackBounds.isValid()) {
+        map.fitBounds(fallbackBounds, { padding: [24, 24], maxZoom: 18, animate: false });
+        return;
+      }
     }
 
     if (bounds.length) {
@@ -58,7 +111,7 @@ function AutoFitBounds({ route, selectedPlace, boundary, center }) {
 
     // set view without animation
     map.setView(center, 16, { animate: false });
-  }, [route, selectedPlace, boundary, center, map]);
+  }, [route, selectedPlace, boundary, map10, center, map]);
 
   return null;
 }
@@ -98,11 +151,50 @@ function computeBounds(geoData, route, center) {
     });
   }
 
+  if (geoData.map10?.features) {
+    geoData.map10.features.forEach(addFeatureCoords);
+  }
+
   if (route?.features) {
     route.features.forEach(addFeatureCoords);
   }
 
   return bounds.isValid() ? bounds : null;
+}
+
+function HospitalHomeControl({ bounds, center }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const control = L.control({ position: 'topleft' });
+
+    control.onAdd = () => {
+      const container = L.DomUtil.create('div', 'leaflet-bar hospital-home-control');
+      const button = L.DomUtil.create('button', 'hospital-home-button', container);
+      button.type = 'button';
+      button.title = 'Về bản đồ bệnh viện';
+      button.setAttribute('aria-label', 'Về bản đồ bệnh viện');
+      button.textContent = 'BV';
+
+      L.DomEvent.disableClickPropagation(container);
+      L.DomEvent.on(button, 'click', (event) => {
+        L.DomEvent.stop(event);
+        if (bounds?.isValid()) {
+          map.fitBounds(bounds, { padding: [28, 28], maxZoom: 18, animate: true });
+          return;
+        }
+
+        map.setView(center, 16, { animate: true });
+      });
+
+      return container;
+    };
+
+    control.addTo(map);
+    return () => control.remove();
+  }, [bounds, center, map]);
+
+  return null;
 }
 
 export default function MapView({
@@ -115,23 +207,25 @@ export default function MapView({
   electricVehicleLocation
 }) {
   const bounds = useMemo(() => computeBounds(geoData, route, center), [geoData, route, center]);
-  const maxBounds = bounds ? bounds.pad(0.15) : null;
+  const hospitalBounds = useMemo(() => computeBounds(geoData, null, center), [geoData, center]);
 
   return (
     <div className="map-view">
       <MapContainer
         center={center}
         zoom={16}
+        minZoom={0}
+        maxZoom={22}
         scrollWheelZoom={true}
         className="map-container"
         bounds={bounds || undefined}
         boundsOptions={{ padding: [20, 20] }}
-        maxBounds={maxBounds || undefined}
-        maxBoundsViscosity={0.85}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          maxZoom={22}
+          maxNativeZoom={19}
         />
 
         {layers.boundary && geoData.boundary && (
@@ -144,6 +238,23 @@ export default function MapView({
 
         {layers.road && geoData.road && (
           <GeoJSON data={geoData.road} style={layerStyles.road} />
+        )}
+
+        {layers.map10 && geoData.map10 && (
+          <GeoJSON
+            data={geoData.map10}
+            style={getMap10Style}
+            pointToLayer={(feature, latlng) =>
+              L.circleMarker(latlng, {
+                radius: 5,
+                color: '#0F766E',
+                fillColor: '#CCFBF1',
+                fillOpacity: 1,
+                weight: 2
+              })
+            }
+            onEachFeature={bindMap10Feature}
+          />
         )}
 
         {layers.point && geoData.point && (
@@ -272,7 +383,14 @@ export default function MapView({
           </>
         )}
 
-        <AutoFitBounds route={route} selectedPlace={selectedPlace} boundary={geoData.boundary} center={center} />
+        <AutoFitBounds
+          route={route}
+          selectedPlace={selectedPlace}
+          boundary={geoData.boundary}
+          map10={geoData.map10}
+          center={center}
+        />
+        <HospitalHomeControl bounds={hospitalBounds} center={center} />
       </MapContainer>
     </div>
   );
