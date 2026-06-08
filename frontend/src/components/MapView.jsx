@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo } from 'react';
+﻿import { useEffect, useMemo, useRef } from 'react';
 import L from 'leaflet';
 import { MapContainer, GeoJSON, CircleMarker, Popup, TileLayer, useMap } from 'react-leaflet';
 
@@ -38,9 +38,17 @@ const layerStyles = {
   }
 };
 
-function getFeatureName(feature, fallback = 'Map 1.0') {
+function formatMapLabel(value) {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getFeatureName(feature, fallback = 'Bản đồ chi tiết') {
   const props = feature?.properties || {};
-  return props.name || props.id || props.label || fallback;
+  return formatMapLabel(props.name || props.id || props.label || fallback);
 }
 
 function getMap10Style(feature) {
@@ -55,7 +63,7 @@ function bindMap10Feature(feature, layer) {
   const name = getFeatureName(feature);
   const type = feature?.geometry?.type || 'GeoJSON';
 
-  layer.bindTooltip(`<strong>${name}</strong><br>Map 1.0`, {
+  layer.bindTooltip(`<strong>${name}</strong><br>Bản đồ chi tiết`, {
     permanent: false,
     direction: 'top',
     offset: [0, -10]
@@ -64,29 +72,84 @@ function bindMap10Feature(feature, layer) {
   layer.bindPopup(`
     <div style="font-family: Inter, sans-serif; max-width: 220px;">
       <h4 style="margin: 0 0 8px; color: #0F766E;">${name}</h4>
-      <p style="margin: 0; font-size: 0.9em; color: #64748B;">Lớp: Map 1.0 · ${type}</p>
+      <p style="margin: 0; font-size: 0.9em; color: #64748B;">Lớp: Bản đồ chi tiết · ${type}</p>
     </div>
   `);
 }
 
-function AutoFitBounds({ route, selectedPlace, boundary, map10, center }) {
+function AutoFitBounds({ route, selectedPlace, boundary, map10, center, userLocation, electricVehicleLocations, focusElectricVehicles, vehicleFocusRequest }) {
   const map = useMap();
+  const didFitInitialBounds = useRef(false);
+  const lastRouteKey = useRef(null);
+  const lastSelectedPlaceKey = useRef(null);
+  const lastVehicleFocusRequest = useRef(null);
+
+  const routeKey = useMemo(() => {
+    if (!route?.features?.length) return null;
+    return route.features
+      .map((feature) => `${feature.geometry?.type || ''}:${JSON.stringify(feature.geometry?.coordinates || [])}`)
+      .join('|');
+  }, [route]);
+
+  const selectedPlaceKey = selectedPlace?.coords
+    ? `${selectedPlace.id || selectedPlace.name || selectedPlace.label || 'selected'}:${selectedPlace.coords.join(',')}`
+    : null;
 
   useEffect(() => {
-    const bounds = [];
+    if (!routeKey) {
+      lastRouteKey.current = null;
+    }
 
-    if (route?.features?.length) {
+    if (!selectedPlaceKey) {
+      lastSelectedPlaceKey.current = null;
+    }
+
+    if (routeKey && routeKey !== lastRouteKey.current) {
+      const bounds = [];
       for (const feature of route.features) {
         const coords = feature.geometry.coordinates || [];
         coords.forEach(([lon, lat]) => bounds.push([lat, lon]));
       }
+
+      if (bounds.length) {
+        map.fitBounds(bounds, { padding: [24, 24], maxZoom: 18, animate: false });
+        lastRouteKey.current = routeKey;
+        return;
+      }
     }
 
-    if (selectedPlace?.coords) {
-      bounds.push(selectedPlace.coords);
+    if (selectedPlaceKey && selectedPlaceKey !== lastSelectedPlaceKey.current) {
+      map.fitBounds([selectedPlace.coords], { padding: [24, 24], maxZoom: 18, animate: false });
+      lastSelectedPlaceKey.current = selectedPlaceKey;
+      return;
     }
 
-    if (!bounds.length) {
+    if (!focusElectricVehicles) {
+      lastVehicleFocusRequest.current = null;
+    }
+
+    if (
+      focusElectricVehicles
+      && electricVehicleLocations?.length
+      && vehicleFocusRequest !== lastVehicleFocusRequest.current
+    ) {
+      const bounds = [];
+      if (userLocation) {
+        bounds.push([userLocation.lat, userLocation.lng]);
+      }
+
+      electricVehicleLocations.forEach((vehicle) => {
+        bounds.push([vehicle.lat, vehicle.lng]);
+      });
+
+      if (bounds.length) {
+        map.fitBounds(bounds, { padding: [24, 24], maxZoom: 18, animate: false });
+        lastVehicleFocusRequest.current = vehicleFocusRequest;
+        return;
+      }
+    }
+
+    if (!didFitInitialBounds.current) {
       const fallbackBounds = L.latLngBounds([]);
 
       boundary?.features?.forEach((feature) => {
@@ -99,19 +162,14 @@ function AutoFitBounds({ route, selectedPlace, boundary, map10, center }) {
 
       if (fallbackBounds.isValid()) {
         map.fitBounds(fallbackBounds, { padding: [24, 24], maxZoom: 18, animate: false });
+        didFitInitialBounds.current = true;
         return;
       }
-    }
 
-    if (bounds.length) {
-      // disable animated camera movement to avoid "rolling" effect
-      map.fitBounds(bounds, { padding: [24, 24], maxZoom: 18, animate: false });
-      return;
+      map.setView(center, 16, { animate: false });
+      didFitInitialBounds.current = true;
     }
-
-    // set view without animation
-    map.setView(center, 16, { animate: false });
-  }, [route, selectedPlace, boundary, map10, center, map]);
+  }, [route, routeKey, selectedPlace, selectedPlaceKey, boundary, map10, center, userLocation, electricVehicleLocations, focusElectricVehicles, vehicleFocusRequest, map]);
 
   return null;
 }
@@ -174,7 +232,7 @@ function HospitalHomeControl({ bounds, center }) {
       button.type = 'button';
       button.title = 'Về bản đồ bệnh viện';
       button.setAttribute('aria-label', 'Về bản đồ bệnh viện');
-      button.textContent = 'BV';
+      button.textContent = 'Về';
 
       L.DomEvent.disableClickPropagation(container);
       L.DomEvent.on(button, 'click', (event) => {
@@ -197,6 +255,33 @@ function HospitalHomeControl({ bounds, center }) {
   return null;
 }
 
+function MapResizeHandler({ layoutMode }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const resizeMap = () => map.invalidateSize({ animate: false });
+    resizeMap();
+    const frameId = window.requestAnimationFrame(resizeMap);
+    const timeoutId = window.setTimeout(resizeMap, 250);
+    const container = map.getContainer();
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(resizeMap)
+      : null;
+
+    if (resizeObserver) {
+      resizeObserver.observe(container);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timeoutId);
+      resizeObserver?.disconnect();
+    };
+  }, [layoutMode, map]);
+
+  return null;
+}
+
 export default function MapView({
   center,
   layers,
@@ -204,9 +289,11 @@ export default function MapView({
   route,
   selectedPlace,
   userLocation,
-  electricVehicleLocation
+  electricVehicleLocations = [],
+  focusElectricVehicles = false,
+  vehicleFocusRequest = 0,
+  layoutMode = 'default'
 }) {
-  const bounds = useMemo(() => computeBounds(geoData, route, center), [geoData, route, center]);
   const hospitalBounds = useMemo(() => computeBounds(geoData, null, center), [geoData, center]);
 
   return (
@@ -218,8 +305,6 @@ export default function MapView({
         maxZoom={22}
         scrollWheelZoom={true}
         className="map-container"
-        bounds={bounds || undefined}
-        boundsOptions={{ padding: [20, 20] }}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -342,10 +427,12 @@ export default function MapView({
           </>
         )}
 
-        {electricVehicleLocation && (
-          <>
+        {electricVehicleLocations.flatMap((vehicle) => {
+          const vehicleKey = vehicle.id || vehicle.device;
+          return [
             <CircleMarker
-              center={[electricVehicleLocation.lat, electricVehicleLocation.lng]}
+              key={`${vehicleKey}-ring`}
+              center={[vehicle.lat, vehicle.lng]}
               radius={15}
               pathOptions={{
                 color: '#F59E0B',
@@ -354,9 +441,10 @@ export default function MapView({
                 weight: 1.2,
                 className: 'vehicle-pulse-ring'
               }}
-            />
+            />,
             <CircleMarker
-              center={[electricVehicleLocation.lat, electricVehicleLocation.lng]}
+              key={`${vehicleKey}-marker`}
+              center={[vehicle.lat, vehicle.lng]}
               radius={8}
               pathOptions={{
                 color: '#FFFFFF',
@@ -370,18 +458,19 @@ export default function MapView({
                   <strong style={{ color: '#B45309' }}>Xe điện</strong>
                   <br />
                   <span style={{ fontSize: '0.82em', color: '#64748B' }}>
-                    {electricVehicleLocation.lat.toFixed(6)}, {electricVehicleLocation.lng.toFixed(6)}
+                    {vehicle.lat.toFixed(6)}, {vehicle.lng.toFixed(6)}
                   </span>
                   <br />
                   <span style={{ fontSize: '0.78em', color: '#64748B' }}>
-                    Thiết bị: {electricVehicleLocation.device}
-                    {electricVehicleLocation.satellites !== undefined ? ` · ${electricVehicleLocation.satellites} vệ tinh` : ''}
+                    Thiết bị: {vehicle.device}
+                    {vehicle.satellites !== undefined ? ` · ${vehicle.satellites} vệ tinh` : ''}
+                    {Number.isFinite(vehicle.distanceKm) ? ` · ${Math.round(vehicle.distanceKm * 1000)}m` : ''}
                   </span>
                 </div>
               </Popup>
             </CircleMarker>
-          </>
-        )}
+          ];
+        })}
 
         <AutoFitBounds
           route={route}
@@ -389,8 +478,13 @@ export default function MapView({
           boundary={geoData.boundary}
           map10={geoData.map10}
           center={center}
+          userLocation={userLocation}
+          electricVehicleLocations={electricVehicleLocations}
+          focusElectricVehicles={focusElectricVehicles}
+          vehicleFocusRequest={vehicleFocusRequest}
         />
         <HospitalHomeControl bounds={hospitalBounds} center={center} />
+        <MapResizeHandler layoutMode={layoutMode} />
       </MapContainer>
     </div>
   );

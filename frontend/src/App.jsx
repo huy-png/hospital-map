@@ -7,15 +7,18 @@ import {
   queryPlaces,
   checkUserLocationInHospital,
   findNearestMap10RoadNode,
+  haversineDistanceKm,
   prependGpsConnector
 } from './utils/geo.js';
 
 const INITIAL_CENTER = [10.7813, 106.7030];
 const GPS_ROUTE_START_ID = 'gps-location';
-const ELECTRIC_VEHICLE_DEVICE_ID = '441D64F39AF0';
+const ELECTRIC_VEHICLE_DEVICE_IDS = ['441D64F39AF0'];
+const NEARBY_VEHICLE_LIMIT = 3;
 const TEST_GATE_LOCATION = { lat: 10.780525, lng: 106.703157 };
 
 function App() {
+  const [activePage, setActivePage] = useState('home');
   const [geoData, setGeoData] = useState({ road: null, building: null, point: null, boundary: null, map10: null });
   const [places, setPlaces] = useState([]);
   const [placeQuery, setPlaceQuery] = useState('');
@@ -31,6 +34,9 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
+  const [showLegendModal, setShowLegendModal] = useState(false);
+  const [showLayersModal, setShowLayersModal] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [mobileRoutePanelOpen, setMobileRoutePanelOpen] = useState(false);
 
   // GPS state variables
@@ -39,7 +45,10 @@ function App() {
   const [useTestGateLocation, setUseTestGateLocation] = useState(false);
   const [isInsideHospital, setIsInsideHospital] = useState(true);
   const [isGeofenceEnabled, setIsGeofenceEnabled] = useState(true);
-  const [electricVehicleLocation, setElectricVehicleLocation] = useState(null);
+  const [electricVehicles, setElectricVehicles] = useState([]);
+  const [nearbyElectricVehicles, setNearbyElectricVehicles] = useState([]);
+  const [vehicleCallStatus, setVehicleCallStatus] = useState('idle');
+  const [vehicleFocusRequest, setVehicleFocusRequest] = useState(0);
   const [electricVehicleStatus, setElectricVehicleStatus] = useState('loading');
 
   // Camera QR scanner state variables
@@ -172,24 +181,41 @@ function App() {
 
     async function loadElectricVehicleGps() {
       try {
-        const result = await fetchElectricVehicleGps(ELECTRIC_VEHICLE_DEVICE_ID);
-        const gps = result?.data?.gps || result?.data;
-        const lat = Number(gps?.latitude ?? gps?.lat);
-        const lng = Number(gps?.longitude ?? gps?.lng ?? gps?.lon);
+        const vehicles = await Promise.all(
+          ELECTRIC_VEHICLE_DEVICE_IDS.map(async (deviceId) => {
+            const result = await fetchElectricVehicleGps(deviceId);
+            const gps = result?.data?.gps || result?.data;
+            const lat = Number(gps?.latitude ?? gps?.lat);
+            const lng = Number(gps?.longitude ?? gps?.lng ?? gps?.lon);
 
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-          throw new Error('Dữ liệu GPS xe điện không hợp lệ');
-        }
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+              throw new Error(`Dữ liệu GPS xe điện không hợp lệ: ${deviceId}`);
+            }
 
-        if (isMounted) {
-          setElectricVehicleLocation({
+            return {
+              id: deviceId,
             lat,
             lng,
-            device: result.device || ELECTRIC_VEHICLE_DEVICE_ID,
+              device: result.device || deviceId,
             satellites: gps?.satellites,
             speed: gps?.speed,
             timestamp: gps?.timestamp,
             wifiSignal: gps?.wifiSignal
+            };
+          })
+        );
+
+        if (isMounted) {
+          setElectricVehicles(vehicles);
+          setNearbyElectricVehicles((current) => {
+            if (vehicleCallStatus !== 'active' || !effectiveUserLocation) return current;
+            return vehicles
+              .map((vehicle) => ({
+                ...vehicle,
+                distanceKm: haversineDistanceKm([effectiveUserLocation.lat, effectiveUserLocation.lng], [vehicle.lat, vehicle.lng])
+              }))
+              .sort((a, b) => a.distanceKm - b.distanceKm)
+              .slice(0, NEARBY_VEHICLE_LIMIT);
           });
           setElectricVehicleStatus('online');
         }
@@ -208,7 +234,7 @@ function App() {
       isMounted = false;
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [effectiveUserLocation, vehicleCallStatus]);
 
   const filteredPlaces = useMemo(() => queryPlaces(places, placeQuery), [places, placeQuery]);
 
@@ -220,6 +246,13 @@ function App() {
   const routeToLabel = routePlaces.find((item) => item.id === routeTo)?.label || routeTo;
   const activeLayerCount = Object.values(layers).filter(Boolean).length;
   const totalLayerCount = Object.keys(layers).length;
+  const nearestVehicle = nearbyElectricVehicles[0] || null;
+  const nearestVehicleDistanceText = nearestVehicle && Number.isFinite(nearestVehicle.distanceKm)
+    ? `${Math.round(nearestVehicle.distanceKm * 1000)}m`
+    : null;
+  const visibleElectricVehicles = layers.vehicle
+    ? (nearbyElectricVehicles.length > 0 ? nearbyElectricVehicles : electricVehicles)
+    : [];
 
   const handleSelectPlace = (place) => {
     setSelectedPlace(place);
@@ -273,6 +306,35 @@ function App() {
     }
   };
 
+  const handleCallElectricVehicle = () => {
+    if (!effectiveUserLocation) {
+      setError('Chưa có vị trí của bạn để gọi xe điện. Vui lòng bật vị trí mô phỏng hoặc cấp quyền GPS.');
+      setVehicleCallStatus('error');
+      return;
+    }
+
+    if (!electricVehicles.length) {
+      setError('Chưa có dữ liệu vị trí xe điện để hiển thị.');
+      setVehicleCallStatus('error');
+      return;
+    }
+
+    const sortedVehicles = electricVehicles
+      .map((vehicle) => ({
+        ...vehicle,
+        distanceKm: haversineDistanceKm([effectiveUserLocation.lat, effectiveUserLocation.lng], [vehicle.lat, vehicle.lng])
+      }))
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, NEARBY_VEHICLE_LIMIT);
+
+    setNearbyElectricVehicles(sortedVehicles);
+    setVehicleFocusRequest((current) => current + 1);
+    setVehicleCallStatus('active');
+    setLayers((current) => ({ ...current, vehicle: true }));
+    setStatus('Đã hiển thị xe điện gần nhất');
+    setError(null);
+  };
+
   const handleEndRoute = () => {
     setRoute(null);
     setSelectedPlace(null);
@@ -285,6 +347,8 @@ function App() {
     setRoute(null);
     setSelectedPlace(null);
     setNearestStartNode(null);
+    setNearbyElectricVehicles([]);
+    setVehicleCallStatus('idle');
     setRouteFrom(GPS_ROUTE_START_ID);
     setError(null);
     setStatus('Sẵn sàng');
@@ -295,7 +359,7 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${activePage === 'map' ? 'map-focus' : ''}`}>
       <header className="top-header">
         <div className="brand-card header-brand">
           <div className="brand-visual">+</div>
@@ -306,10 +370,70 @@ function App() {
         </div>
 
         <div className="header-actions">
-          <button className="menu-item active">Trang chủ</button>
-          <button className="menu-item">Bản đồ</button>
-          <button className="menu-item">Hướng dẫn</button>
-          <button className="button primary header-qr-btn" onClick={() => setShowQrModal(true)}>Quét QR</button>
+          <button
+            className={`menu-item desktop-header-action ${activePage === 'home' ? 'active' : ''}`}
+            onClick={() => setActivePage('home')}
+          >
+            Trang chủ
+          </button>
+          <button
+            className={`menu-item desktop-header-action ${activePage === 'map' ? 'active' : ''}`}
+            onClick={() => setActivePage('map')}
+          >
+            Bản đồ
+          </button>
+          <button className="menu-item desktop-header-action">Hướng dẫn</button>
+          <button className="button primary header-qr-btn desktop-header-action" onClick={() => setShowQrModal(true)}>Quét QR</button>
+
+          <div className="mobile-header-menu">
+            <button
+              type="button"
+              className="button secondary header-menu-toggle"
+              onClick={() => setHeaderMenuOpen((current) => !current)}
+              aria-expanded={headerMenuOpen}
+              aria-haspopup="menu"
+            >
+              Menu
+            </button>
+
+            {headerMenuOpen && (
+              <div className="header-dropdown" role="menu">
+                <button
+                  type="button"
+                  className={`header-dropdown-item ${activePage === 'home' ? 'active' : ''}`}
+                  onClick={() => {
+                    setActivePage('home');
+                    setHeaderMenuOpen(false);
+                  }}
+                >
+                  Trang chủ
+                </button>
+                <button
+                  type="button"
+                  className={`header-dropdown-item ${activePage === 'map' ? 'active' : ''}`}
+                  onClick={() => {
+                    setActivePage('map');
+                    setHeaderMenuOpen(false);
+                  }}
+                >
+                  Bản đồ
+                </button>
+                <button type="button" className="header-dropdown-item" onClick={() => setHeaderMenuOpen(false)}>
+                  Hướng dẫn
+                </button>
+                <button
+                  type="button"
+                  className="header-dropdown-item primary"
+                  onClick={() => {
+                    setShowQrModal(true);
+                    setHeaderMenuOpen(false);
+                  }}
+                >
+                  Quét QR
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -348,7 +472,7 @@ function App() {
                       className="field-input"
                       value={
                         effectiveUserLocation
-                          ? `${effectiveUserLocation.lat.toFixed(5)}, ${effectiveUserLocation.lng.toFixed(5)}${useTestGateLocation ? ' (test)' : ''}`
+                          ? `${effectiveUserLocation.lat.toFixed(5)}, ${effectiveUserLocation.lng.toFixed(5)}${useTestGateLocation ? ' (mô phỏng)' : ''}`
                           : 'Đang chờ GPS'
                       }
                       readOnly
@@ -385,11 +509,14 @@ function App() {
                 route={route}
                 selectedPlace={selectedPlace}
                 userLocation={effectiveUserLocation}
-                electricVehicleLocation={layers.vehicle ? electricVehicleLocation : null}
+                electricVehicleLocations={visibleElectricVehicles}
+                focusElectricVehicles={nearbyElectricVehicles.length > 0}
+                vehicleFocusRequest={vehicleFocusRequest}
+                layoutMode={activePage}
               />
 
               {(route || selectedPlace) && (
-                <div className="map-overlay-card">
+                <div className="map-overlay-card route-summary-card">
                   <div className="overlay-meta">
                     <div>
                       <span>Điểm đi</span>
@@ -413,12 +540,111 @@ function App() {
                   )}
                 </div>
               )}
+
+              {nearestVehicle && (
+                <div className={`map-overlay-card vehicle-summary-card ${route || selectedPlace ? 'with-route-summary' : ''}`}>
+                  <div className="overlay-meta vehicle-overlay-meta">
+                    <div>
+                      <span>Xe điện gần nhất</span>
+                      <strong>{nearestVehicleDistanceText || 'Đang tính khoảng cách'}</strong>
+                    </div>
+                    <div>
+                      <span>Thiết bị</span>
+                      <strong>{nearestVehicle.device}</strong>
+                    </div>
+                    <div>
+                      <span>Trạng thái</span>
+                      <strong>Đang hiển thị trên bản đồ</strong>
+                    </div>
+                  </div>
+                  <div className="overlay-actions">
+                    <button className="button secondary route-end-button" onClick={() => {
+                      setNearbyElectricVehicles([]);
+                      setVehicleCallStatus('idle');
+                    }}>
+                      Ẩn xe điện
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
 
           <aside className="right-panel">
-            <div className="card legend-card">
-              <h3>Chú thích</h3>
+            <div className="map-tool-panel">
+              <button type="button" className="map-tool-button" onClick={() => setShowLegendModal(true)}>
+                <span>
+                  <strong>Chú thích</strong>
+                  <small>Màu sắc và ký hiệu</small>
+                </span>
+                <b>?</b>
+              </button>
+
+              <button type="button" className="map-tool-button" onClick={() => setShowLayersModal(true)}>
+                <span>
+                  <strong>Lớp bản đồ</strong>
+                  <small>{activeLayerCount}/{totalLayerCount} đang bật</small>
+                </span>
+                <b>L</b>
+              </button>
+
+              <button
+                type="button"
+                className="map-tool-button vehicle-tool-button"
+                onClick={handleCallElectricVehicle}
+                disabled={!effectiveUserLocation || electricVehicleStatus !== 'online'}
+              >
+                <span>
+                  <strong>Xe điện</strong>
+                  <small>
+                    {nearestVehicleDistanceText
+                      ? `Xe gần nhất ${nearestVehicleDistanceText}`
+                      : electricVehicleStatus === 'online'
+                        ? `${electricVehicles.length} xe online`
+                        : electricVehicleStatus === 'loading'
+                          ? 'Đang kết nối'
+                          : 'Mất kết nối'}
+                  </small>
+                </span>
+                <b>X</b>
+              </button>
+
+              <button type="button" className="map-tool-button" onClick={() => setShowStatusModal(true)}>
+              <span>
+                  <strong>Cài đặt</strong>
+                <small>{status}</small>
+              </span>
+                <b>C</b>
+            </button>
+            </div>
+          </aside>
+        </div>
+
+        {(error || (isGeofenceEnabled && !isInsideHospital)) && (
+          <div className="notification-stack" role="status" aria-live="polite">
+            {isGeofenceEnabled && !isInsideHospital && (
+              <div className="error-banner warning-banner-accent">
+                <strong>Ngoài phạm vi hỗ trợ</strong>
+                <span>Chức năng dẫn đường đã bị vô hiệu hóa.</span>
+              </div>
+            )}
+
+            {error && (
+              <div className="error-banner">
+                <strong>Thông báo</strong>
+                <span>{error}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {showLegendModal && (
+          <div className="modal-overlay" onClick={() => setShowLegendModal(false)}>
+            <div className="modal info-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="modal-header">
+                <h3>Chú thích bản đồ</h3>
+                <button className="close-btn" type="button" onClick={() => setShowLegendModal(false)}>×</button>
+              </div>
               <div className="legend-list">
                 <div className="legend-entry">
                   <span className="legend-chip chip-primary" />
@@ -446,13 +672,17 @@ function App() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
 
-            <details className="card layers-card layer-dropdown">
-              <summary className="layer-dropdown-summary">
-                <span>Lớp bản đồ</span>
-                <strong>{activeLayerCount}/{totalLayerCount} đang bật</strong>
-              </summary>
-              <div className="layer-dropdown-body">
+        {showLayersModal && (
+          <div className="modal-overlay" onClick={() => setShowLayersModal(false)}>
+            <div className="modal info-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="modal-header">
+                <h3>Lớp bản đồ</h3>
+                <button className="close-btn" type="button" onClick={() => setShowLayersModal(false)}>×</button>
+              </div>
+              <div className="layer-dropdown-body layer-modal-body">
                 <div className="layer-toggle">
                   <label>
                     <input type="checkbox" checked={layers.road} onChange={() => toggleLayer('road')} />
@@ -480,7 +710,7 @@ function App() {
                 <div className="layer-toggle">
                   <label>
                     <input type="checkbox" checked={layers.map10} onChange={() => toggleLayer('map10')} />
-                    Map 1.0
+                    Bản đồ chi tiết
                   </label>
                 </div>
                 <div className="layer-toggle">
@@ -490,35 +720,7 @@ function App() {
                   </label>
                 </div>
               </div>
-            </details>
-            <button type="button" className="card status-popup-trigger" onClick={() => setShowStatusModal(true)}>
-              <span>
-                <strong>Trạng thái hệ thống</strong>
-                <small>{status}</small>
-              </span>
-              <span className={`status-chip ${status.includes('Lỗi') ? 'status-danger' : 'status-success'}`}>
-                <span className="status-dot" />
-                Mở
-              </span>
-            </button>
-          </aside>
-        </div>
-
-        {(error || (isGeofenceEnabled && !isInsideHospital)) && (
-          <div className="notification-stack" role="status" aria-live="polite">
-            {isGeofenceEnabled && !isInsideHospital && (
-              <div className="error-banner warning-banner-accent">
-                <strong>Ngoài phạm vi hỗ trợ</strong>
-                <span>Chức năng dẫn đường đã bị vô hiệu hóa.</span>
-              </div>
-            )}
-
-            {error && (
-              <div className="error-banner">
-                <strong>Thông báo</strong>
-                <span>{error}</span>
-              </div>
-            )}
+            </div>
           </div>
         )}
 
@@ -526,7 +728,7 @@ function App() {
           <div className="modal-overlay" onClick={() => setShowStatusModal(false)}>
             <div className="modal info-modal status-modal" onClick={(event) => event.stopPropagation()}>
               <div className="modal-header">
-                <h3>Trạng thái hệ thống</h3>
+                <h3>Cài đặt và trạng thái</h3>
                 <button className="close-btn" type="button" onClick={() => setShowStatusModal(false)}>×</button>
               </div>
 
@@ -544,7 +746,7 @@ function App() {
                   {useTestGateLocation && (
                     <span className="status-chip status-warning">
                       <span className="status-dot" />
-                      Vị trí test
+                      Mô phỏng
                     </span>
                   )}
                   {!useTestGateLocation && gpsStatus === 'prompt' && (
@@ -574,14 +776,14 @@ function App() {
                 </div>
 
                 <div className="status-row">
-                  <span className="status-label">Vị trí test</span>
+                  <span className="status-label">Vị trí mô phỏng</span>
                   <label className="status-toggle">
                     <input
                       type="checkbox"
                       checked={useTestGateLocation}
                       onChange={(event) => setUseTestGateLocation(event.target.checked)}
                     />
-                    <span>{useTestGateLocation ? 'Cổng Lý Tự Trọng' : 'GPS thật'}</span>
+                    <span>{useTestGateLocation ? 'Cổng Lý Tự Trọng' : 'Tắt'}</span>
                   </label>
                 </div>
 
@@ -601,7 +803,7 @@ function App() {
                   <span className="status-label">Xe điện</span>
                   <span className={`status-chip ${electricVehicleStatus === 'online' ? 'status-success' : electricVehicleStatus === 'loading' ? 'status-muted' : 'status-danger'}`}>
                     <span className="status-dot" />
-                    {electricVehicleStatus === 'online' ? 'Đang cập nhật' : electricVehicleStatus === 'loading' ? 'Đang kết nối' : 'Mất kết nối'}
+                    {electricVehicleStatus === 'online' ? `${electricVehicles.length} xe online` : electricVehicleStatus === 'loading' ? 'Đang kết nối' : 'Mất kết nối'}
                   </span>
                 </div>
               </div>
@@ -613,9 +815,10 @@ function App() {
                 </div>
               )}
 
-              {electricVehicleLocation && (
+              {nearbyElectricVehicles[0] && (
                 <div className="status-coordinates vehicle-coordinates">
-                  Xe điện: {electricVehicleLocation.lat.toFixed(5)}, {electricVehicleLocation.lng.toFixed(5)}
+                  Xe gần nhất: {nearbyElectricVehicles[0].lat.toFixed(5)}, {nearbyElectricVehicles[0].lng.toFixed(5)}
+                  {Number.isFinite(nearbyElectricVehicles[0].distanceKm) ? ` (${Math.round(nearbyElectricVehicles[0].distanceKm * 1000)}m)` : ''}
                 </div>
               )}
 

@@ -1,4 +1,4 @@
-function findGeoJsonId(feature) {
+export function findGeoJsonId(feature) {
   const props = feature?.properties || {};
   if (typeof props.id === 'string' && props.id.trim()) {
     return props.id.trim();
@@ -13,13 +13,12 @@ function findGeoJsonId(feature) {
   return null;
 }
 
-function formatLabel(value) {
+export function formatLabel(value) {
   if (!value || typeof value !== 'string') return '';
   return value
     .replace(/[-_]+/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+    .trim();
 }
 
 function isValidLngLat(coord) {
@@ -100,7 +99,7 @@ export function buildMap10PlaceIndex(map10GeoJson) {
       id: getCoordRouteId(coords),
       label: count > 1 ? `${baseLabel} (${count})` : baseLabel,
       coords: [coords[1], coords[0]],
-      source: 'map-1.0'
+      source: 'Bản đồ chi tiết'
     });
   }
 
