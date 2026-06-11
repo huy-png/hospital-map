@@ -1,13 +1,13 @@
 ﻿import { useEffect, useMemo, useState, useRef } from 'react';
 import MapView from './components/MapView.jsx';
 import Sidebar from './components/Sidebar.jsx';
-import { fetchElectricVehicleGps, fetchGeoJson, getRoute } from './services/api.js';
+import { fetchElectricVehicleGps, fetchGeoJson, getRoute, sendElectricVehicleRequest } from './services/api.js';
 import {
-  buildMap10PlaceIndex,
+  buildMapPlaceIndex,
   queryPlaces,
-  checkUserLocationInHospital,
-  findNearestMap10RoadNode,
+  findNearestMapRoadNode,
   haversineDistanceKm,
+  isLocationInsideBoundary,
   prependGpsConnector
 } from './utils/geo.js';
 
@@ -19,7 +19,8 @@ const TEST_GATE_LOCATION = { lat: 10.780525, lng: 106.703157 };
 
 function App() {
   const [activePage, setActivePage] = useState('home');
-  const [geoData, setGeoData] = useState({ road: null, building: null, point: null, boundary: null, map10: null });
+  const [mapData, setMapData] = useState(null);
+  const [boundaryData, setBoundaryData] = useState(null);
   const [places, setPlaces] = useState([]);
   const [placeQuery, setPlaceQuery] = useState('');
   const [selectedPlace, setSelectedPlace] = useState(null);
@@ -30,12 +31,9 @@ function App() {
   const [status, setStatus] = useState('Sẵn sàng');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [layers, setLayers] = useState({ road: true, building: true, point: true, boundary: false, map10: true, vehicle: true });
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showLegendModal, setShowLegendModal] = useState(false);
-  const [showLayersModal, setShowLayersModal] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [mobileRoutePanelOpen, setMobileRoutePanelOpen] = useState(false);
 
@@ -43,8 +41,6 @@ function App() {
   const [userLocation, setUserLocation] = useState(null);
   const [gpsStatus, setGpsStatus] = useState('prompt'); // prompt, tracking, denied, error
   const [useTestGateLocation, setUseTestGateLocation] = useState(false);
-  const [isInsideHospital, setIsInsideHospital] = useState(true);
-  const [isGeofenceEnabled, setIsGeofenceEnabled] = useState(true);
   const [electricVehicles, setElectricVehicles] = useState([]);
   const [nearbyElectricVehicles, setNearbyElectricVehicles] = useState([]);
   const [vehicleCallStatus, setVehicleCallStatus] = useState('idle');
@@ -55,7 +51,9 @@ function App() {
   const [qrStream, setQrStream] = useState(null);
   const [qrCameraError, setQrCameraError] = useState(null);
   const videoRef = useRef(null);
-  const effectiveUserLocation = useTestGateLocation ? TEST_GATE_LOCATION : userLocation;
+  const rawUserLocation = useTestGateLocation ? TEST_GATE_LOCATION : userLocation;
+  const isUserInsideHospital = isLocationInsideBoundary(rawUserLocation, boundaryData);
+  const effectiveUserLocation = isUserInsideHospital ? rawUserLocation : null;
 
   // Geolocation tracking effect
   useEffect(() => {
@@ -89,26 +87,6 @@ function App() {
       navigator.geolocation.clearWatch(watchId);
     };
   }, []);
-
-  // Geofencing verification effect
-  useEffect(() => {
-    if (!isGeofenceEnabled) {
-      setIsInsideHospital(true);
-      return;
-    }
-
-    if (effectiveUserLocation && geoData.boundary) {
-      const { inside } = checkUserLocationInHospital(
-        effectiveUserLocation.lat,
-        effectiveUserLocation.lng,
-        geoData.boundary,
-        20 // 20-meter buffer zone
-      );
-      setIsInsideHospital(inside);
-    } else {
-      setIsInsideHospital(true); // Default to true if GPS coordinates not loaded/denied
-    }
-  }, [isGeofenceEnabled, effectiveUserLocation, geoData.boundary]);
 
   // Camera stream control effect
   useEffect(() => {
@@ -150,16 +128,14 @@ function App() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [road, building, point, boundary, map10] = await Promise.all([
-          fetchGeoJson('road'),
-          fetchGeoJson('building'),
-          fetchGeoJson('point'),
-          fetchGeoJson('boundary'),
-          fetchGeoJson('map-1.0')
+        const [nextMapData, nextBoundaryData] = await Promise.all([
+          fetchGeoJson('map-01'),
+          fetchGeoJson('boundary')
         ]);
 
-        setGeoData({ road, building, point, boundary, map10 });
-        const nextPlaces = buildMap10PlaceIndex(map10);
+        setMapData(nextMapData);
+        setBoundaryData(nextBoundaryData);
+        const nextPlaces = buildMapPlaceIndex(nextMapData);
         setPlaces(nextPlaces);
         setStatus('Sẵn sàng');
         setError(null);
@@ -175,6 +151,17 @@ function App() {
 
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (!rawUserLocation || !boundaryData || isUserInsideHospital) return;
+
+    setRoute(null);
+    setSelectedPlace(null);
+    setNearestStartNode(null);
+    setNearbyElectricVehicles([]);
+    setVehicleCallStatus('idle');
+    setRouteFrom(GPS_ROUTE_START_ID);
+  }, [rawUserLocation, boundaryData, isUserInsideHospital]);
 
   useEffect(() => {
     let isMounted = true;
@@ -206,10 +193,14 @@ function App() {
         );
 
         if (isMounted) {
-          setElectricVehicles(vehicles);
+          const vehiclesInsideHospital = vehicles.filter((vehicle) =>
+            isLocationInsideBoundary(vehicle, boundaryData)
+          );
+
+          setElectricVehicles(vehiclesInsideHospital);
           setNearbyElectricVehicles((current) => {
             if (vehicleCallStatus !== 'active' || !effectiveUserLocation) return current;
-            return vehicles
+            return vehiclesInsideHospital
               .map((vehicle) => ({
                 ...vehicle,
                 distanceKm: haversineDistanceKm([effectiveUserLocation.lat, effectiveUserLocation.lng], [vehicle.lat, vehicle.lng])
@@ -217,7 +208,7 @@ function App() {
               .sort((a, b) => a.distanceKm - b.distanceKm)
               .slice(0, NEARBY_VEHICLE_LIMIT);
           });
-          setElectricVehicleStatus('online');
+          setElectricVehicleStatus(vehiclesInsideHospital.length > 0 ? 'online' : 'outside');
         }
       } catch (err) {
         console.error('Error loading electric vehicle GPS:', err);
@@ -234,7 +225,7 @@ function App() {
       isMounted = false;
       window.clearInterval(intervalId);
     };
-  }, [effectiveUserLocation, vehicleCallStatus]);
+  }, [boundaryData, effectiveUserLocation, vehicleCallStatus]);
 
   const filteredPlaces = useMemo(() => queryPlaces(places, placeQuery), [places, placeQuery]);
 
@@ -244,15 +235,29 @@ function App() {
     ? `Vị trí GPS của bạn (${nearestStartNode.label || 'đường gần nhất'})`
     : 'Vị trí GPS của bạn';
   const routeToLabel = routePlaces.find((item) => item.id === routeTo)?.label || routeTo;
-  const activeLayerCount = Object.values(layers).filter(Boolean).length;
-  const totalLayerCount = Object.keys(layers).length;
-  const nearestVehicle = nearbyElectricVehicles[0] || null;
+  const visibleElectricVehicles = (nearbyElectricVehicles.length > 0 ? nearbyElectricVehicles : electricVehicles)
+    .filter((vehicle) => isLocationInsideBoundary(vehicle, boundaryData));
+  const nearestVehicle = visibleElectricVehicles[0] || null;
   const nearestVehicleDistanceText = nearestVehicle && Number.isFinite(nearestVehicle.distanceKm)
     ? `${Math.round(nearestVehicle.distanceKm * 1000)}m`
     : null;
-  const visibleElectricVehicles = layers.vehicle
-    ? (nearbyElectricVehicles.length > 0 ? nearbyElectricVehicles : electricVehicles)
-    : [];
+
+  const findNearestPickupPlace = (location) => {
+    if (!location || !places.length) return null;
+
+    return places.reduce((nearest, place) => {
+      if (!place.coords) return nearest;
+      const distanceKm = haversineDistanceKm([location.lat, location.lng], place.coords);
+      if (!nearest || distanceKm < nearest.distanceKm) {
+        return {
+          ...place,
+          distanceKm,
+          distanceMeters: Math.round(distanceKm * 1000)
+        };
+      }
+      return nearest;
+    }, null);
+  };
 
   const handleSelectPlace = (place) => {
     setSelectedPlace(place);
@@ -262,19 +267,19 @@ function App() {
   };
 
   const handleSearchRoute = async () => {
-    if (!effectiveUserLocation) {
+    if (!rawUserLocation) {
       setError('Chưa có vị trí GPS của bạn. Vui lòng cấp quyền vị trí và thử lại.');
       return;
     }
-    if (isGeofenceEnabled && !isInsideHospital) {
-      setError('Bạn đang ở ngoài phạm vi hỗ trợ của hệ thống. Chức năng dẫn đường đã bị vô hiệu hóa.');
+    if (!isUserInsideHospital) {
+      setError('Vị trí GPS của bạn đang ngoài khuôn viên bệnh viện.');
       return;
     }
     if (!routeTo) {
       setError('Vui lòng chọn điểm đến.');
       return;
     }
-    const nearestNode = findNearestMap10RoadNode(effectiveUserLocation, geoData.map10);
+    const nearestNode = findNearestMapRoadNode(effectiveUserLocation, mapData);
     if (!nearestNode) {
       setError('Không tìm thấy điểm đường gần vị trí GPS hiện tại.');
       return;
@@ -287,7 +292,7 @@ function App() {
       if (nearestNode.id === routeTo) {
         nextRoute = prependGpsConnector({ type: 'FeatureCollection', features: [] }, effectiveUserLocation, nearestNode);
       } else {
-        const result = await getRoute(nearestNode.id, routeTo, 'map-1.0');
+        const result = await getRoute(nearestNode.id, routeTo);
         nextRoute = prependGpsConnector(result.route || null, effectiveUserLocation, nearestNode);
       }
       setNearestStartNode(nearestNode);
@@ -306,15 +311,20 @@ function App() {
     }
   };
 
-  const handleCallElectricVehicle = () => {
-    if (!effectiveUserLocation) {
+  const handleCallElectricVehicle = async () => {
+    if (!rawUserLocation) {
       setError('Chưa có vị trí của bạn để gọi xe điện. Vui lòng bật vị trí mô phỏng hoặc cấp quyền GPS.');
+      setVehicleCallStatus('error');
+      return;
+    }
+    if (!isUserInsideHospital) {
+      setError('Vị trí GPS của bạn đang ngoài khuôn viên bệnh viện nên chưa thể gọi xe điện.');
       setVehicleCallStatus('error');
       return;
     }
 
     if (!electricVehicles.length) {
-      setError('Chưa có dữ liệu vị trí xe điện để hiển thị.');
+      setError('Chưa có xe điện nào trong khuôn viên bệnh viện để hiển thị.');
       setVehicleCallStatus('error');
       return;
     }
@@ -327,12 +337,35 @@ function App() {
       .sort((a, b) => a.distanceKm - b.distanceKm)
       .slice(0, NEARBY_VEHICLE_LIMIT);
 
-    setNearbyElectricVehicles(sortedVehicles);
-    setVehicleFocusRequest((current) => current + 1);
-    setVehicleCallStatus('active');
-    setLayers((current) => ({ ...current, vehicle: true }));
-    setStatus('Đã hiển thị xe điện gần nhất');
+    setVehicleCallStatus('sending');
     setError(null);
+
+    try {
+      const pickupPlace = findNearestPickupPlace(effectiveUserLocation);
+
+      await sendElectricVehicleRequest({
+        pickup: {
+          lat: effectiveUserLocation.lat,
+          lng: effectiveUserLocation.lng,
+          label: pickupPlace?.label || 'Vị trí người dùng',
+          nearestPlaceId: pickupPlace?.id || null,
+          distanceToNearestPlaceMeters: pickupPlace?.distanceMeters ?? null
+        },
+        vehicle: {
+          device: sortedVehicles[0].device || sortedVehicles[0].id,
+          distanceMeters: Math.round(sortedVehicles[0].distanceKm * 1000)
+        }
+      });
+
+      setNearbyElectricVehicles(sortedVehicles);
+      setVehicleFocusRequest((current) => current + 1);
+      setVehicleCallStatus('active');
+      setStatus('Đã gửi yêu cầu gọi xe điện');
+    } catch (err) {
+      setVehicleCallStatus('error');
+      setError(err.message || 'Không thể gửi yêu cầu gọi xe điện.');
+      setStatus('Lỗi gọi xe điện');
+    }
   };
 
   const handleEndRoute = () => {
@@ -352,10 +385,6 @@ function App() {
     setRouteFrom(GPS_ROUTE_START_ID);
     setError(null);
     setStatus('Sẵn sàng');
-  };
-
-  const toggleLayer = (layerKey) => {
-    setLayers((current) => ({ ...current, [layerKey]: !current[layerKey] }));
   };
 
   return (
@@ -471,8 +500,8 @@ function App() {
                     <input
                       className="field-input"
                       value={
-                        effectiveUserLocation
-                          ? `${effectiveUserLocation.lat.toFixed(5)}, ${effectiveUserLocation.lng.toFixed(5)}${useTestGateLocation ? ' (mô phỏng)' : ''}`
+                        rawUserLocation
+                          ? `${rawUserLocation.lat.toFixed(5)}, ${rawUserLocation.lng.toFixed(5)}${useTestGateLocation ? ' (mô phỏng)' : isUserInsideHospital ? '' : ' (ngoài khuôn viên)'}`
                           : 'Đang chờ GPS'
                       }
                       readOnly
@@ -490,7 +519,7 @@ function App() {
                     </select>
                   </div>
                   <div className="route-actions">
-                    <button className="button primary" onClick={handleSearchRoute} disabled={loading || !effectiveUserLocation || !routeTo || (isGeofenceEnabled && !isInsideHospital)}>
+                    <button className="button primary" onClick={handleSearchRoute} disabled={loading || !effectiveUserLocation || !routeTo}>
                       {loading ? 'Đang tìm...' : route ? 'Cập nhật chỉ đường' : 'Bắt đầu chỉ đường'}
                     </button>
                     {route && (
@@ -504,8 +533,8 @@ function App() {
 
               <MapView
                 center={INITIAL_CENTER}
-                layers={layers}
-                geoData={geoData}
+                mapData={mapData}
+                boundaryData={boundaryData}
                 route={route}
                 selectedPlace={selectedPlace}
                 userLocation={effectiveUserLocation}
@@ -580,30 +609,26 @@ function App() {
                 <b>?</b>
               </button>
 
-              <button type="button" className="map-tool-button" onClick={() => setShowLayersModal(true)}>
-                <span>
-                  <strong>Lớp bản đồ</strong>
-                  <small>{activeLayerCount}/{totalLayerCount} đang bật</small>
-                </span>
-                <b>L</b>
-              </button>
-
               <button
                 type="button"
                 className="map-tool-button vehicle-tool-button"
                 onClick={handleCallElectricVehicle}
-                disabled={!effectiveUserLocation || electricVehicleStatus !== 'online'}
+                disabled={!effectiveUserLocation || electricVehicleStatus !== 'online' || vehicleCallStatus === 'sending'}
               >
                 <span>
-                  <strong>Xe điện</strong>
+                  <strong>{vehicleCallStatus === 'sending' ? 'Đang gọi xe' : 'Xe điện'}</strong>
                   <small>
-                    {nearestVehicleDistanceText
+                    {vehicleCallStatus === 'sending'
+                      ? 'Đang gửi yêu cầu'
+                      : nearestVehicleDistanceText
                       ? `Xe gần nhất ${nearestVehicleDistanceText}`
                       : electricVehicleStatus === 'online'
                         ? `${electricVehicles.length} xe online`
                         : electricVehicleStatus === 'loading'
                           ? 'Đang kết nối'
-                          : 'Mất kết nối'}
+                          : electricVehicleStatus === 'outside'
+                            ? 'Ngoài khuôn viên'
+                            : 'Mất kết nối'}
                   </small>
                 </span>
                 <b>X</b>
@@ -620,21 +645,12 @@ function App() {
           </aside>
         </div>
 
-        {(error || (isGeofenceEnabled && !isInsideHospital)) && (
+        {error && (
           <div className="notification-stack" role="status" aria-live="polite">
-            {isGeofenceEnabled && !isInsideHospital && (
-              <div className="error-banner warning-banner-accent">
-                <strong>Ngoài phạm vi hỗ trợ</strong>
-                <span>Chức năng dẫn đường đã bị vô hiệu hóa.</span>
-              </div>
-            )}
-
-            {error && (
-              <div className="error-banner">
-                <strong>Thông báo</strong>
-                <span>{error}</span>
-              </div>
-            )}
+            <div className="error-banner">
+              <strong>Thông báo</strong>
+              <span>{error}</span>
+            </div>
           </div>
         )}
 
@@ -675,55 +691,6 @@ function App() {
           </div>
         )}
 
-        {showLayersModal && (
-          <div className="modal-overlay" onClick={() => setShowLayersModal(false)}>
-            <div className="modal info-modal" onClick={(event) => event.stopPropagation()}>
-              <div className="modal-header">
-                <h3>Lớp bản đồ</h3>
-                <button className="close-btn" type="button" onClick={() => setShowLayersModal(false)}>×</button>
-              </div>
-              <div className="layer-dropdown-body layer-modal-body">
-                <div className="layer-toggle">
-                  <label>
-                    <input type="checkbox" checked={layers.road} onChange={() => toggleLayer('road')} />
-                    Đường nội bộ
-                  </label>
-                </div>
-                <div className="layer-toggle">
-                  <label>
-                    <input type="checkbox" checked={layers.building} onChange={() => toggleLayer('building')} />
-                    Tòa nhà
-                  </label>
-                </div>
-                <div className="layer-toggle">
-                  <label>
-                    <input type="checkbox" checked={layers.point} onChange={() => toggleLayer('point')} />
-                    Điểm dịch vụ
-                  </label>
-                </div>
-                <div className="layer-toggle">
-                  <label>
-                    <input type="checkbox" checked={layers.boundary} onChange={() => toggleLayer('boundary')} />
-                    Ranh giới khu vực
-                  </label>
-                </div>
-                <div className="layer-toggle">
-                  <label>
-                    <input type="checkbox" checked={layers.map10} onChange={() => toggleLayer('map10')} />
-                    Bản đồ chi tiết
-                  </label>
-                </div>
-                <div className="layer-toggle">
-                  <label>
-                    <input type="checkbox" checked={layers.vehicle} onChange={() => toggleLayer('vehicle')} />
-                    Xe điện
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {showStatusModal && (
           <div className="modal-overlay" onClick={() => setShowStatusModal(false)}>
             <div className="modal info-modal status-modal" onClick={(event) => event.stopPropagation()}>
@@ -756,9 +723,9 @@ function App() {
                     </span>
                   )}
                   {!useTestGateLocation && gpsStatus === 'tracking' && (
-                    <span className={`status-chip ${isInsideHospital ? 'status-success' : 'status-danger'}`}>
+                    <span className={`status-chip ${isUserInsideHospital ? 'status-success' : 'status-danger'}`}>
                       <span className="status-dot" />
-                      {isInsideHospital ? 'Trong phạm vi' : 'Ngoài phạm vi'}
+                      {isUserInsideHospital ? 'Trong khuôn viên' : 'Ngoài khuôn viên'}
                     </span>
                   )}
                   {!useTestGateLocation && gpsStatus === 'denied' && (
@@ -788,30 +755,19 @@ function App() {
                 </div>
 
                 <div className="status-row">
-                  <span className="status-label">Phạm vi</span>
-                  <label className="status-toggle">
-                    <input
-                      type="checkbox"
-                      checked={isGeofenceEnabled}
-                      onChange={(event) => setIsGeofenceEnabled(event.target.checked)}
-                    />
-                    <span>{isGeofenceEnabled ? 'Đang kiểm tra' : 'Tắt demo'}</span>
-                  </label>
-                </div>
-
-                <div className="status-row">
                   <span className="status-label">Xe điện</span>
-                  <span className={`status-chip ${electricVehicleStatus === 'online' ? 'status-success' : electricVehicleStatus === 'loading' ? 'status-muted' : 'status-danger'}`}>
+                  <span className={`status-chip ${electricVehicleStatus === 'online' ? 'status-success' : electricVehicleStatus === 'loading' ? 'status-muted' : electricVehicleStatus === 'outside' ? 'status-warning' : 'status-danger'}`}>
                     <span className="status-dot" />
-                    {electricVehicleStatus === 'online' ? `${electricVehicles.length} xe online` : electricVehicleStatus === 'loading' ? 'Đang kết nối' : 'Mất kết nối'}
+                    {electricVehicleStatus === 'online' ? `${electricVehicles.length} xe trong khuôn viên` : electricVehicleStatus === 'loading' ? 'Đang kết nối' : electricVehicleStatus === 'outside' ? 'Ngoài khuôn viên' : 'Mất kết nối'}
                   </span>
                 </div>
               </div>
 
-              {effectiveUserLocation && (
+              {rawUserLocation && (
                 <div className="status-coordinates">
-                  Người dùng: {effectiveUserLocation.lat.toFixed(5)}, {effectiveUserLocation.lng.toFixed(5)}
+                  Người dùng: {rawUserLocation.lat.toFixed(5)}, {rawUserLocation.lng.toFixed(5)}
                   {useTestGateLocation ? ' (cổng Lý Tự Trọng)' : ''}
+                  {!isUserInsideHospital ? ' - ngoài khuôn viên' : ''}
                 </div>
               )}
 

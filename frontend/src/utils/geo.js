@@ -4,7 +4,7 @@ export function findGeoJsonId(feature) {
     return props.id.trim();
   }
 
-  for (const [key, value] of Object.entries(props)) {
+  for (const value of Object.values(props)) {
     if (typeof value === 'string' && value.trim()) {
       return value.trim();
     }
@@ -37,54 +37,11 @@ export function getCoordRouteId(coord) {
   return `coord:${lng.toFixed(6)},${lat.toFixed(6)}`;
 }
 
-export function buildPlaceIndex({ roadGeoJson, pointGeoJson }) {
-  const points = new Map();
-  const placeList = [];
-
-  for (const feature of pointGeoJson?.features || []) {
-    const id = findGeoJsonId(feature);
-    const coords = feature?.geometry?.coordinates;
-    if (!id) continue;
-
-    points.set(id, {
-      id,
-      label: formatLabel(id),
-      coords: Array.isArray(coords) && coords.length === 2 ? [coords[1], coords[0]] : null,
-      source: 'point'
-    });
-  }
-
-  const roadEndpoints = new Set();
-  for (const feature of roadGeoJson?.features || []) {
-    const from = feature?.properties?.from;
-    const to = feature?.properties?.to;
-    if (typeof from === 'string' && from.trim()) roadEndpoints.add(from.trim());
-    if (typeof to === 'string' && to.trim()) roadEndpoints.add(to.trim());
-  }
-
-  for (const id of roadEndpoints) {
-    if (!points.has(id)) {
-      points.set(id, {
-        id,
-        label: formatLabel(id),
-        coords: null,
-        source: 'road'
-      });
-    }
-  }
-
-  for (const place of points.values()) {
-    placeList.push(place);
-  }
-
-  return placeList.sort((a, b) => a.label.localeCompare(b.label, 'vi'));
-}
-
-export function buildMap10PlaceIndex(map10GeoJson) {
+export function buildMapPlaceIndex(mapGeoJson) {
   const places = [];
   const labelCounts = new Map();
 
-  for (const feature of map10GeoJson?.features || []) {
+  for (const feature of mapGeoJson?.features || []) {
     if (feature?.geometry?.type !== 'Point' || !isValidLngLat(feature.geometry.coordinates)) continue;
 
     const id = findGeoJsonId(feature);
@@ -99,7 +56,7 @@ export function buildMap10PlaceIndex(map10GeoJson) {
       id: getCoordRouteId(coords),
       label: count > 1 ? `${baseLabel} (${count})` : baseLabel,
       coords: [coords[1], coords[0]],
-      source: 'Bản đồ chi tiết'
+      source: 'map-01'
     });
   }
 
@@ -130,32 +87,10 @@ export function haversineDistanceKm(a, b) {
   return earthRadiusKm * c;
 }
 
-export function getRoadNodeIndex(roadGeoJson) {
+export function getMapNodeIndex(mapGeoJson) {
   const nodes = new Map();
 
-  for (const feature of roadGeoJson?.features || []) {
-    const from = feature?.properties?.from;
-    const to = feature?.properties?.to;
-    const coords = feature?.geometry?.coordinates;
-    if (!Array.isArray(coords) || coords.length < 2) continue;
-
-    const first = coords[0];
-    const last = coords[coords.length - 1];
-    if (typeof from === 'string' && from.trim() && Array.isArray(first)) {
-      nodes.set(from.trim(), { id: from.trim(), coords: [first[1], first[0]] });
-    }
-    if (typeof to === 'string' && to.trim() && Array.isArray(last)) {
-      nodes.set(to.trim(), { id: to.trim(), coords: [last[1], last[0]] });
-    }
-  }
-
-  return nodes;
-}
-
-export function getMap10NodeIndex(map10GeoJson) {
-  const nodes = new Map();
-
-  for (const feature of map10GeoJson?.features || []) {
+  for (const feature of mapGeoJson?.features || []) {
     if (feature?.geometry?.type !== 'LineString') continue;
 
     for (const coord of feature.geometry.coordinates || []) {
@@ -169,26 +104,10 @@ export function getMap10NodeIndex(map10GeoJson) {
   return nodes;
 }
 
-export function findNearestRoadNode(userLocation, roadGeoJson) {
+export function findNearestMapRoadNode(userLocation, mapGeoJson) {
   if (!userLocation) return null;
   const userCoords = [userLocation.lat, userLocation.lng];
-  const nodes = getRoadNodeIndex(roadGeoJson);
-  let nearest = null;
-
-  for (const node of nodes.values()) {
-    const distanceKm = haversineDistanceKm(userCoords, node.coords);
-    if (!nearest || distanceKm < nearest.distanceKm) {
-      nearest = { ...node, distanceKm, distanceMeters: distanceKm * 1000 };
-    }
-  }
-
-  return nearest;
-}
-
-export function findNearestMap10RoadNode(userLocation, map10GeoJson) {
-  if (!userLocation) return null;
-  const userCoords = [userLocation.lat, userLocation.lng];
-  const nodes = getMap10NodeIndex(map10GeoJson);
+  const nodes = getMapNodeIndex(mapGeoJson);
   let nearest = null;
 
   for (const node of nodes.values()) {
@@ -226,76 +145,80 @@ export function prependGpsConnector(routeGeoJson, userLocation, nearestNode) {
   };
 }
 
-export function checkUserLocationInHospital(lat, lng, boundaryGeoJson, bufferMeters = 20) {
-  if (!boundaryGeoJson || !boundaryGeoJson.features || boundaryGeoJson.features.length === 0) {
-    return { inside: true, distance: 0 };
-  }
-
-  const feature = boundaryGeoJson.features[0];
-  if (!feature || !feature.geometry || feature.geometry.type !== 'Polygon') {
-    return { inside: true, distance: 0 };
-  }
-
-  const polygon = feature.geometry.coordinates[0]; // array of [lng, lat]
-  
-  // 1. Check point in polygon (in lat/lng space)
-  const isInside = pointInPolygon([lng, lat], polygon);
-  if (isInside) {
-    return { inside: true, distance: 0 };
-  }
-
-  // 2. Check distance to each segment
-  const LAT_TO_METER = 111139;
-  const LNG_TO_METER = 111139 * Math.cos((lat * Math.PI) / 180);
-
-  const px = lng * LNG_TO_METER;
-  const py = lat * LAT_TO_METER;
-
-  let minDistance = Infinity;
-
-  for (let i = 0; i < polygon.length - 1; i++) {
-    const ax = polygon[i][0] * LNG_TO_METER;
-    const ay = polygon[i][1] * LAT_TO_METER;
-    const bx = polygon[i+1][0] * LNG_TO_METER;
-    const by = polygon[i+1][1] * LAT_TO_METER;
-
-    const abx = bx - ax;
-    const aby = by - ay;
-    const apx = px - ax;
-    const apy = py - ay;
-
-    const ab2 = abx * abx + aby * aby;
-    let t = ab2 === 0 ? 0 : (apx * abx + apy * aby) / ab2;
-    t = Math.max(0, Math.min(1, t)); // clamp to segment
-
-    const cx = ax + t * abx;
-    const cy = ay + t * aby;
-
-    const dx = px - cx;
-    const dy = py - cy;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist < minDistance) {
-      minDistance = dist;
-    }
-  }
-
-  return {
-    inside: minDistance <= bufferMeters,
-    distance: minDistance
-  };
-}
-
 function pointInPolygon(point, polygon) {
-  const x = point[0], y = point[1];
+  const [x, y] = point;
   let inside = false;
+
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i][0], yi = polygon[i][1];
-    const xj = polygon[j][0], yj = polygon[j][1];
-    const intersect = ((yi > y) !== (yj > y))
-        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-    if (intersect) inside = !inside;
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    const intersects = ((yi > y) !== (yj > y))
+      && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi);
+    if (intersects) inside = !inside;
   }
+
   return inside;
 }
 
+function distanceToSegmentMeters(point, a, b) {
+  const [lng, lat] = point;
+  const latToMeter = 111139;
+  const lngToMeter = 111139 * Math.cos((lat * Math.PI) / 180);
+
+  const px = lng * lngToMeter;
+  const py = lat * latToMeter;
+  const ax = a[0] * lngToMeter;
+  const ay = a[1] * latToMeter;
+  const bx = b[0] * lngToMeter;
+  const by = b[1] * latToMeter;
+  const abx = bx - ax;
+  const aby = by - ay;
+  const ab2 = abx * abx + aby * aby;
+  const t = ab2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / ab2));
+  const cx = ax + t * abx;
+  const cy = ay + t * aby;
+  const dx = px - cx;
+  const dy = py - cy;
+
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function isPointInPolygonWithBuffer(point, polygon, bufferMeters) {
+  if (!Array.isArray(polygon) || polygon.length < 4) return false;
+  if (pointInPolygon(point, polygon)) return true;
+  if (!bufferMeters) return false;
+
+  let minDistance = Infinity;
+  for (let i = 0; i < polygon.length - 1; i++) {
+    minDistance = Math.min(minDistance, distanceToSegmentMeters(point, polygon[i], polygon[i + 1]));
+  }
+
+  return minDistance <= bufferMeters;
+}
+
+export function isLocationInsideBoundary(location, boundaryGeoJson, bufferMeters = 20) {
+  if (!location) return false;
+  if (!boundaryGeoJson?.features?.length) return true;
+
+  const point = [Number(location.lng), Number(location.lat)];
+  if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) return false;
+
+  return boundaryGeoJson.features.some((feature) => {
+    const geometry = feature?.geometry;
+    if (!geometry) return false;
+
+    if (geometry.type === 'Polygon') {
+      return (geometry.coordinates || []).some((ring) =>
+        isPointInPolygonWithBuffer(point, ring, bufferMeters)
+      );
+    }
+
+    if (geometry.type === 'MultiPolygon') {
+      return (geometry.coordinates || []).some((polygon) =>
+        polygon.some((ring) => isPointInPolygonWithBuffer(point, ring, bufferMeters))
+      );
+    }
+
+    return false;
+  });
+}

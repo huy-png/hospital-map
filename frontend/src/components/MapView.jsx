@@ -1,31 +1,16 @@
-﻿import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import L from 'leaflet';
 import { MapContainer, GeoJSON, CircleMarker, Popup, TileLayer, useMap } from 'react-leaflet';
 
 const layerStyles = {
-  road: {
-    color: '#9AA6B2',
-    weight: 3,
-    opacity: 0.85
-  },
-  building: {
-    color: '#CBD5E1',
-    weight: 1,
-    fillColor: '#FBFEFF',
-    fillOpacity: 0.55
-  },
   boundary: {
-    color: '#C7D2DA',
+    color: '#0F766E',
     weight: 2,
+    opacity: 0.8,
+    fillOpacity: 0,
     dashArray: '6 6'
   },
-  map10Line: {
-    color: '#64748B',
-    weight: 2.5,
-    opacity: 0.8,
-    dashArray: '4 4'
-  },
-  map10Polygon: {
+  mapPolygon: {
     color: '#14B8A6',
     weight: 1.2,
     fillColor: '#CCFBF1',
@@ -51,15 +36,19 @@ function getFeatureName(feature, fallback = 'Bản đồ chi tiết') {
   return formatMapLabel(props.name || props.id || props.label || fallback);
 }
 
-function getMap10Style(feature) {
-  if (feature?.geometry?.type === 'Polygon' || feature?.geometry?.type === 'MultiPolygon') {
-    return layerStyles.map10Polygon;
-  }
+function withoutLineStrings(geoJson) {
+  if (!geoJson?.features) return geoJson;
 
-  return layerStyles.map10Line;
+  return {
+    ...geoJson,
+    features: geoJson.features.filter((feature) => {
+      const type = feature?.geometry?.type;
+      return type !== 'LineString' && type !== 'MultiLineString';
+    })
+  };
 }
 
-function bindMap10Feature(feature, layer) {
+function bindMapFeature(feature, layer) {
   const name = getFeatureName(feature);
   const type = feature?.geometry?.type || 'GeoJSON';
 
@@ -72,12 +61,36 @@ function bindMap10Feature(feature, layer) {
   layer.bindPopup(`
     <div style="font-family: Inter, sans-serif; max-width: 220px;">
       <h4 style="margin: 0 0 8px; color: #0F766E;">${name}</h4>
-      <p style="margin: 0; font-size: 0.9em; color: #64748B;">Lớp: Bản đồ chi tiết · ${type}</p>
+      <p style="margin: 0; font-size: 0.9em; color: #64748B;">Lớp: map-01 · ${type}</p>
     </div>
   `);
 }
 
-function AutoFitBounds({ route, selectedPlace, boundary, map10, center, userLocation, electricVehicleLocations, focusElectricVehicles, vehicleFocusRequest }) {
+function collectGeoJsonCoords(bounds, coordinates) {
+  if (!Array.isArray(coordinates)) return;
+  if (typeof coordinates[0] === 'number') {
+    bounds.extend([coordinates[1], coordinates[0]]);
+    return;
+  }
+
+  coordinates.forEach((item) => collectGeoJsonCoords(bounds, item));
+}
+
+function computeBounds(mapData, boundaryData, center) {
+  const bounds = L.latLngBounds([center]);
+
+  mapData?.features?.forEach((feature) => {
+    collectGeoJsonCoords(bounds, feature.geometry?.coordinates);
+  });
+
+  boundaryData?.features?.forEach((feature) => {
+    collectGeoJsonCoords(bounds, feature.geometry?.coordinates);
+  });
+
+  return bounds.isValid() ? bounds : null;
+}
+
+function AutoFitBounds({ route, selectedPlace, mapData, boundaryData, center, userLocation, electricVehicleLocations, focusElectricVehicles, vehicleFocusRequest }) {
   const map = useMap();
   const didFitInitialBounds = useRef(false);
   const lastRouteKey = useRef(null);
@@ -152,11 +165,11 @@ function AutoFitBounds({ route, selectedPlace, boundary, map10, center, userLoca
     if (!didFitInitialBounds.current) {
       const fallbackBounds = L.latLngBounds([]);
 
-      boundary?.features?.forEach((feature) => {
+      mapData?.features?.forEach((feature) => {
         collectGeoJsonCoords(fallbackBounds, feature.geometry?.coordinates);
       });
 
-      map10?.features?.forEach((feature) => {
+      boundaryData?.features?.forEach((feature) => {
         collectGeoJsonCoords(fallbackBounds, feature.geometry?.coordinates);
       });
 
@@ -169,55 +182,9 @@ function AutoFitBounds({ route, selectedPlace, boundary, map10, center, userLoca
       map.setView(center, 16, { animate: false });
       didFitInitialBounds.current = true;
     }
-  }, [route, routeKey, selectedPlace, selectedPlaceKey, boundary, map10, center, userLocation, electricVehicleLocations, focusElectricVehicles, vehicleFocusRequest, map]);
+  }, [route, routeKey, selectedPlace, selectedPlaceKey, mapData, boundaryData, center, userLocation, electricVehicleLocations, focusElectricVehicles, vehicleFocusRequest, map]);
 
   return null;
-}
-
-function collectGeoJsonCoords(bounds, coordinates) {
-  if (!Array.isArray(coordinates)) return;
-  if (typeof coordinates[0] === 'number') {
-    bounds.extend([coordinates[1], coordinates[0]]);
-    return;
-  }
-
-  coordinates.forEach((item) => collectGeoJsonCoords(bounds, item));
-}
-
-function computeBounds(geoData, route, center) {
-  const bounds = L.latLngBounds([center]);
-
-  const addFeatureCoords = (feature) => {
-    if (!feature?.geometry?.coordinates) return;
-    collectGeoJsonCoords(bounds, feature.geometry.coordinates);
-  };
-
-  if (geoData.boundary?.features) {
-    geoData.boundary.features.forEach(addFeatureCoords);
-  }
-
-  if (geoData.road?.features) {
-    geoData.road.features.forEach(addFeatureCoords);
-  }
-
-  if (geoData.point?.features) {
-    geoData.point.features.forEach((feature) => {
-      const coords = feature.geometry?.coordinates;
-      if (Array.isArray(coords) && coords.length === 2) {
-        bounds.extend([coords[1], coords[0]]);
-      }
-    });
-  }
-
-  if (geoData.map10?.features) {
-    geoData.map10.features.forEach(addFeatureCoords);
-  }
-
-  if (route?.features) {
-    route.features.forEach(addFeatureCoords);
-  }
-
-  return bounds.isValid() ? bounds : null;
 }
 
 function HospitalHomeControl({ bounds, center }) {
@@ -284,8 +251,8 @@ function MapResizeHandler({ layoutMode }) {
 
 export default function MapView({
   center,
-  layers,
-  geoData,
+  mapData,
+  boundaryData,
   route,
   selectedPlace,
   userLocation,
@@ -294,7 +261,11 @@ export default function MapView({
   vehicleFocusRequest = 0,
   layoutMode = 'default'
 }) {
-  const hospitalBounds = useMemo(() => computeBounds(geoData, null, center), [geoData, center]);
+  const hospitalBounds = useMemo(() => computeBounds(mapData, boundaryData, center), [mapData, boundaryData, center]);
+  const visibleMapData = useMemo(() => withoutLineStrings(mapData), [mapData]);
+  const visibleMapKey = visibleMapData?.features
+    ? `map-01-${visibleMapData.features.length}`
+    : 'map-01-empty';
 
   return (
     <div className="map-view">
@@ -313,22 +284,11 @@ export default function MapView({
           maxNativeZoom={19}
         />
 
-        {layers.boundary && geoData.boundary && (
-          <GeoJSON data={geoData.boundary} style={layerStyles.boundary} />
-        )}
-
-        {layers.building && geoData.building && (
-          <GeoJSON data={geoData.building} style={layerStyles.building} />
-        )}
-
-        {layers.road && geoData.road && (
-          <GeoJSON data={geoData.road} style={layerStyles.road} />
-        )}
-
-        {layers.map10 && geoData.map10 && (
+        {visibleMapData?.features?.length > 0 && (
           <GeoJSON
-            data={geoData.map10}
-            style={getMap10Style}
+            key={visibleMapKey}
+            data={visibleMapData}
+            style={layerStyles.mapPolygon}
             pointToLayer={(feature, latlng) =>
               L.circleMarker(latlng, {
                 radius: 5,
@@ -338,43 +298,12 @@ export default function MapView({
                 weight: 2
               })
             }
-            onEachFeature={bindMap10Feature}
+            onEachFeature={bindMapFeature}
           />
         )}
 
-        {layers.point && geoData.point && (
-          <GeoJSON
-            data={geoData.point}
-            pointToLayer={(feature, latlng) =>
-              L.circleMarker(latlng, {
-                radius: 6,
-                color: '#0EA5A8',
-                fillColor: '#FFFFFF',
-                fillOpacity: 1,
-                weight: 2
-              })
-            }
-            onEachFeature={(feature, layer) => {
-              const props = feature.properties;
-              const name = props.name || props.id || 'Điểm không tên';
-              const type = props.type || 'Điểm';
-              const description = props.description || 'Không có mô tả';
-
-              layer.bindTooltip(`<strong>${name}</strong><br>${type}`, {
-                permanent: false,
-                direction: 'top',
-                offset: [0, -10]
-              });
-
-              layer.bindPopup(`
-                <div style="font-family: Inter, sans-serif; max-width: 200px;">
-                  <h4 style="margin: 0 0 8px; color: #0EA5A8;">${name}</h4>
-                  <p style="margin: 0 0 4px; font-size: 0.9em; color: #64748B;">Loại: ${type}</p>
-                  <p style="margin: 0; font-size: 0.9em;">${description}</p>
-                </div>
-              `);
-            }}
-          />
+        {boundaryData?.features?.length > 0 && (
+          <GeoJSON data={boundaryData} style={layerStyles.boundary} />
         )}
 
         {route?.features && (
@@ -475,8 +404,8 @@ export default function MapView({
         <AutoFitBounds
           route={route}
           selectedPlace={selectedPlace}
-          boundary={geoData.boundary}
-          map10={geoData.map10}
+          mapData={mapData}
+          boundaryData={boundaryData}
           center={center}
           userLocation={userLocation}
           electricVehicleLocations={electricVehicleLocations}
@@ -489,4 +418,3 @@ export default function MapView({
     </div>
   );
 }
-

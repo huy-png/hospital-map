@@ -27,7 +27,12 @@ loadEnvFile();
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'geojson');
-const AVAILABLE_FILES = new Set(['road', 'building', 'point', 'boundary', 'map-1.0']);
+const MAP_FILE = 'map-01';
+const BOUNDARY_FILE = 'boundary';
+const AVAILABLE_FILES = new Set([MAP_FILE, BOUNDARY_FILE]);
+const FILE_ALIASES = new Map([
+  ['map-1.0', MAP_FILE]
+]);
 
 // Firebase Realtime Database config (use REST API)
 const FIREBASE = {
@@ -39,12 +44,14 @@ const FIREBASE = {
   password: process.env.FIREBASE_PASSWORD,
   gpsRoot: process.env.FIREBASE_GPS_ROOT || 'iot',
   gpsDevice: process.env.FIREBASE_GPS_DEVICE || '441D64F39AF0',
+  vehicleRequestRoot: process.env.FIREBASE_VEHICLE_REQUEST_ROOT || 'vehicleRequests',
 };
 
 let firebaseAuthCache = null;
 
 function readJsonFile(name) {
-  const filePath = path.join(DATA_DIR, `${name}.geojson`);
+  const fileName = FILE_ALIASES.get(name) || name;
+  const filePath = path.join(DATA_DIR, `${fileName}.geojson`);
   if (!fs.existsSync(filePath)) return null;
   try {
     const text = fs.readFileSync(filePath, 'utf8');
@@ -84,36 +91,6 @@ function normalizeCoord(coord) {
 function getCoordKey(coord) {
   const [lon, lat] = normalizeCoord(coord);
   return `coord:${lon.toFixed(6)},${lat.toFixed(6)}`;
-}
-
-function buildGraph(roadGeoJson) {
-  const graph = new Map();
-
-  function calculateTotalDistance(coords) {
-    let totalDist = 0;
-    for (let i = 0; i < coords.length - 1; i++) {
-      totalDist += haversineDistance(coords[i], coords[i + 1]);
-    }
-    return totalDist;
-  }
-
-  function addEdge(from, to, coords) {
-    const dist = calculateTotalDistance(coords);
-    if (!graph.has(from)) graph.set(from, []);
-    graph.get(from).push({ node: to, weight: dist, coords });
-  }
-
-  for (const feature of roadGeoJson.features || []) {
-    if (!feature.properties || !feature.geometry || feature.geometry.type !== 'LineString') continue;
-    const from = feature.properties.from;
-    const to = feature.properties.to;
-    const coords = feature.geometry.coordinates;
-    if (!from || !to || !Array.isArray(coords)) continue;
-    addEdge(from, to, coords);
-    addEdge(to, from, [...coords].reverse());
-  }
-
-  return graph;
 }
 
 function buildCoordinateGraph(geoJson) {
@@ -229,8 +206,37 @@ function sendJson(res, data, status = 200) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
   });
   res.end(body);
+}
+
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 1024 * 1024) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (!body.trim()) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(body));
+      } catch (err) {
+        reject(new Error('Invalid JSON body'));
+      }
+    });
+    req.on('error', reject);
+  });
 }
 
 function requestJson(url, options = {}, payload = null) {
@@ -308,8 +314,34 @@ async function fetchFirebaseGpsDevice(deviceId) {
   return requestJson(url.toString());
 }
 
+async function writeFirebaseVehicleRequest(payload) {
+  if (!FIREBASE.databaseURL) throw new Error('Firebase databaseURL not configured');
+  const idToken = await getFirebaseIdToken();
+  const requestId = `req_${Date.now()}`;
+  const baseUrl = FIREBASE.databaseURL.replace(/\/$/, '');
+  const requestPath = [FIREBASE.vehicleRequestRoot, requestId].filter(Boolean).map((part) => encodeURIComponent(part));
+  const latestPath = [FIREBASE.vehicleRequestRoot, 'latest'].filter(Boolean).map((part) => encodeURIComponent(part));
+  const requestUrl = new URL(`${baseUrl}/${requestPath.join('/')}.json`);
+  const latestUrl = new URL(`${baseUrl}/${latestPath.join('/')}.json`);
+
+  requestUrl.searchParams.set('auth', idToken);
+  latestUrl.searchParams.set('auth', idToken);
+
+  const request = {
+    ...payload,
+    id: requestId,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+
+  await requestJson(requestUrl.toString(), { method: 'PUT' }, request);
+  await requestJson(latestUrl.toString(), { method: 'PUT' }, request);
+
+  return request;
+}
+
 function handleGeoJsonRequest(req, res, name) {
-  if (!AVAILABLE_FILES.has(name)) {
+  if (!AVAILABLE_FILES.has(name) && !FILE_ALIASES.has(name)) {
     sendJson(res, { error: 'File not found' }, 404);
     return;
   }
@@ -331,16 +363,13 @@ function handleRouteRequest(req, res, query) {
     return;
   }
 
-  const mapName = query.map === 'road' ? 'road' : 'map-1.0';
-  const roadGeoJson = readJsonFile(mapName);
-  if (!roadGeoJson) {
+  const mapGeoJson = readJsonFile(MAP_FILE);
+  if (!mapGeoJson) {
     sendJson(res, { error: 'Không tìm thấy dữ liệu đường' }, 500);
     return;
   }
 
-  const graphData = mapName === 'road'
-    ? { graph: buildGraph(roadGeoJson), aliases: new Map(), coordsByNode: new Map() }
-    : buildCoordinateGraph(roadGeoJson);
+  const graphData = buildCoordinateGraph(mapGeoJson);
   const resolvedFrom = resolveGraphNode(from, graphData);
   const resolvedTo = resolveGraphNode(to, graphData);
 
@@ -360,15 +389,84 @@ function handleRouteRequest(req, res, query) {
     status: 'ok',
     from,
     to,
-    map: mapName,
+    map: MAP_FILE,
     length_km: route.reduce((sum, edge) => sum + edge.weight, 0),
     route: featureCollection,
   });
 }
 
+async function handleVehicleRequest(req, res) {
+  if (req.method !== 'POST') {
+    sendJson(res, { error: 'Method not allowed' }, 405);
+    return;
+  }
+
+  try {
+    const body = await readRequestBody(req);
+    const pickup = body.pickup || body.userLocation;
+    const vehicle = body.vehicle || body.nearestVehicle;
+
+    if (!Number.isFinite(Number(pickup?.lat)) || !Number.isFinite(Number(pickup?.lng))) {
+      sendJson(res, { error: 'Thiếu vị trí người dùng hợp lệ' }, 400);
+      return;
+    }
+
+    if (!vehicle?.device && !vehicle?.id) {
+      sendJson(res, { error: 'Thiếu thông tin xe điện gần nhất' }, 400);
+      return;
+    }
+
+    const request = await writeFirebaseVehicleRequest({
+      pickup: {
+        lat: Number(pickup.lat),
+        lng: Number(pickup.lng),
+        label: typeof pickup.label === 'string' && pickup.label.trim()
+          ? pickup.label.trim()
+          : 'Vị trí người dùng',
+        nearestPlaceId: pickup.nearestPlaceId || null,
+        distanceToNearestPlaceMeters: Number.isFinite(Number(pickup.distanceToNearestPlaceMeters))
+          ? Number(pickup.distanceToNearestPlaceMeters)
+          : null,
+      },
+      vehicle: {
+        device: vehicle.device || vehicle.id,
+        distanceMeters: Number.isFinite(Number(vehicle.distanceMeters))
+          ? Number(vehicle.distanceMeters)
+          : Number.isFinite(Number(vehicle.distanceKm))
+            ? Math.round(Number(vehicle.distanceKm) * 1000)
+            : null,
+      },
+      source: 'web-map',
+    });
+
+    sendJson(res, {
+      status: 'ok',
+      root: FIREBASE.vehicleRequestRoot,
+      request,
+    });
+  } catch (err) {
+    sendJson(res, { error: 'Không thể gửi yêu cầu xe điện lên Firebase', details: err.message }, 500);
+  }
+}
+
 const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, 'http://localhost');
   const pathname = parsedUrl.pathname;
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.end();
+    return;
+  }
+
+  if (pathname === '/firebase/vehicle-request') {
+    handleVehicleRequest(req, res);
+    return;
+  }
 
   if (pathname === '/route') {
     handleRouteRequest(req, res, Object.fromEntries(parsedUrl.searchParams.entries()));
@@ -382,7 +480,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (pathname === '/' || pathname === '/health') {
-    sendJson(res, { status: 'running', availableGeojson: Array.from(AVAILABLE_FILES), routeExample: '/route?map=map-1.0&from=coord:106.703157,10.780525&to=coord:106.703358,10.782190' });
+    sendJson(res, { status: 'running', availableGeojson: Array.from(AVAILABLE_FILES), routeExample: '/route?map=map-01&from=coord:106.703157,10.780525&to=coord:106.703358,10.782190' });
     return;
   }
 

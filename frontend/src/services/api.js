@@ -17,13 +17,29 @@ async function request(path) {
   return response.json();
 }
 
+async function post(path, body) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `API error ${response.status}`);
+  }
+
+  return response.json();
+}
+
 export function fetchGeoJson(name) {
   return request(`/geojson/${name}`);
 }
 
-export function getRoute(from, to, mapName) {
-  const params = new URLSearchParams({ from, to });
-  if (mapName) params.set('map', mapName);
+export function getRoute(from, to) {
+  const params = new URLSearchParams({ from, to, map: 'map-01' });
   return request(`/route?${params.toString()}`);
 }
 
@@ -32,4 +48,8 @@ export function fetchElectricVehicleGps(device) {
   if (device) params.set('device', device);
   const query = params.toString();
   return request(`/firebase/gps${query ? `?${query}` : ''}`);
+}
+
+export function sendElectricVehicleRequest(payload) {
+  return post('/firebase/vehicle-request', payload);
 }
